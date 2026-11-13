@@ -1,0 +1,27 @@
+[Unit]
+Description=KC1RAY Hub Scanner allstarnets schedule cache
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=kc1ray-monitor
+Group=kc1ray-read
+ReadWritePaths=/var/cache/kc1ray-hub-scanner
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ExecStart=/usr/bin/python3 -B -E -s /opt/kc1ray-hub-scanner/current/update-nets.py
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0027
+Environment=KC1RAY_CONFIG=/etc/kc1ray-hub-scanner/config.toml
+WorkingDirectory=/opt/kc1ray-hub-scanner/current
+TimeoutStopSec=35

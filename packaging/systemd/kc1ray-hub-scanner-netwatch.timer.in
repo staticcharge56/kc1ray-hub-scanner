@@ -1,0 +1,11 @@
+[Unit]
+Description=KC1RAY Hub Scanner netwatch refresh timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+RandomizedDelaySec=60
+Unit=kc1ray-hub-scanner-netwatch.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+{
+  "scanner.py": "89f8615fc9e8608972cd099431c0eb3102e048efb15f66ffabfd8a24c2c72995",
+  "monitor.py": "548dfc4009e966301cb43c2a6cde0d1affa788a051e76f741b9c4bd827853b03",
+  "stats_api.py": "3e692d3a50933e25c53de8b6b01b316d19d05cb734fb2b1235aa55f731321806",
+  "activity_history.py": "1478850c3bcffd9ac11157cd1c446df0dd874d6006482babd4174b579784e7ec",
+  "favorites_store.py": "774380ead62da32f975edb313ba66d926e2a744f3005eaaede25f1d0ee61db2e",
+  "migrate_favorites.py": "9046f46ecc175e6721abe64996cbc3aeb6c9fad33f895d60e688f0296654acc5",
+  "update_netwatch.py": "374add22eb9b83120033547ce2344c7fdc87ad72acf8437f164755e88d586efe",
+  "update-nets.py": "f3d6eb524328f1696358809ea4bd3eb00efccb067fed5d4fd6f406a9d389a32b"
+}

@@ -1,0 +1,8 @@
+# Acceptance only. This installs a synthetic package, never an ASL radio stack.
+FROM debian:12-slim
+ENV container=podman
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends systemd systemd-sysv python3 nodejs ca-certificates passwd iproute2 && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY source/ /src/
+RUN printf 'KC1RAY DISPOSABLE ACCEPTANCE ONLY\n' > /etc/kc1ray-acceptance-only
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

@@ -1,0 +1,8 @@
+{
+  "dashboard.py": "491ad22b47a5e103e8b9b3fd02913427f344309dd213f7c0aea318b4b328edb0",
+  "scanner.py": "89f8615fc9e8608972cd099431c0eb3102e048efb15f66ffabfd8a24c2c72995",
+  "favorites_store.py": "774380ead62da32f975edb313ba66d926e2a744f3005eaaede25f1d0ee61db2e",
+  "migrate_favorites.py": "9046f46ecc175e6721abe64996cbc3aeb6c9fad33f895d60e688f0296654acc5",
+  "update_netwatch.py": "374add22eb9b83120033547ce2344c7fdc87ad72acf8437f164755e88d586efe",
+  "update-nets.py": "f3d6eb524328f1696358809ea4bd3eb00efccb067fed5d4fd6f406a9d389a32b"
+}

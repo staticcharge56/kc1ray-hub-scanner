@@ -1,0 +1,50 @@
+# Local runtime data and private configuration
+/activity.json
+/monitor-history.json
+/nets.json
+/netwatch-nets.json
+/scanner-state.json
+/favorites.json
+/favorites.ini
+/config/config.toml
+/config/credentials.json
+/credentials.json
+*.lock
+*.log
+*.tmp
+.env
+.env.*
+# Retain historical snapshots locally; review any already tracked copies separately.
+*.backup.*
+*.before-*
+*.dry-run-backup
+# Development artifacts
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+# Environment-owned metadata
+.agents/
+.codex/
+.aws/
+
+# Exact migration-source backups may contain private favorites
+favorites-source-*.bak
+
+# Private deployment directories, local build contexts and source archives
+/state/
+/cache/
+/runtime/
+/backups/
+/build/
+/dist/
+/build-context/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.bak
+*.swp
+*~

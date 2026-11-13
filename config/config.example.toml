@@ -1,0 +1,92 @@
+# Implemented configuration through Phase 4. Copy once; never overwrite on upgrade.
+# Set KC1RAY_CONFIG to the absolute path to your private TOML file.
+# No node is assumed. Configure it before starting an application entry point.
+[allstar]
+local_node = ""
+asterisk_binary = "/usr/sbin/asterisk"
+# Hub Scanner manages link transitions in application code; no Asterisk hooks required.
+
+[web]
+# Recommended: explicitly select a detected private LAN IPv4 during installation.
+# Localhost remains the fallback; never use 0.0.0.0 for the LAN workflow.
+bind = "127.0.0.1"
+# Opt-in only for a trusted LAN: HTTP leaves credentials and sessions unencrypted.
+# Example: bind="192.168.50.10", allow_lan_http=true,
+# allowed_origins=["http://192.168.50.10:8085"]. Reserve the address in DHCP.
+allow_lan_http = false
+port = 8085
+controls_enabled = false # Maintenance switch for radio/favorites writes; admin + CSRF always required.
+refresh_seconds = 10
+anonymous_view = false # Exposes favorites/activity/schedules/direct links read-only if enabled.
+# Empty allowed_origins permits only http://localhost:PORT and http://127.0.0.1:PORT.
+allowed_origins = []
+# Trust only the actual proxy hop; configure exact addresses/CIDRs deliberately.
+trusted_proxies = []
+request_timeout_seconds = 5
+max_workers = 16
+
+[auth]
+credentials_file = "/etc/kc1ray-hub-scanner/credentials.json"
+session_idle_seconds = 1800
+session_max_seconds = 28800
+max_sessions = 128
+login_attempts = 5
+login_global_attempts = 20
+login_window_seconds = 300
+sensitive_attempts = 30
+sensitive_window_seconds = 60
+read_attempts = 180
+read_window_seconds = 60
+
+[broker]
+socket_path = "/run/kc1ray-hub-scanner/control.sock"
+# Deliberately unconfigured: select separate non-root identities before deployment.
+web_uid = -1
+service_uid = -1
+socket_gid = -1
+# Must allow the existing 8s link query + 15s Asterisk command flow.
+timeout_seconds = 30
+max_workers = 8
+
+[paths]
+state_dir = "/var/lib/kc1ray-hub-scanner"
+cache_dir = "/var/cache/kc1ray-hub-scanner"
+runtime_dir = "/run/kc1ray-hub-scanner"
+# Legacy/manual layouts default monitor_state_dir to state_dir. Managed installation
+# explicitly uses /var/lib/kc1ray-hub-scanner-monitor for the separate monitor UID.
+# monitor_state_dir = "/var/lib/kc1ray-hub-scanner-monitor"
+# scanner_script defaults to scanner.py alongside configuration.py.
+# The web broker executes the bundled scanner module. Custom scanner code requires review.
+
+[monitor]
+stats_url_template = "https://stats.allstarlink.org/api/stats/{node}"
+poll_interval_seconds = 4
+max_stats_age_seconds = 300
+activity_window_seconds = 300
+request_timeout_seconds = 10
+history_retention_seconds = 86400
+history_write_interval_seconds = 60
+cache_write_interval_seconds = 15
+response_max_bytes = 262144
+backoff_initial_seconds = 30
+backoff_max_seconds = 900
+# Retry-After is a minimum and may exceed the exponential backoff ceiling.
+
+[controls]
+cooldown_seconds = 15
+
+[schedules.netwatch]
+enabled = false
+url = "https://newenglanddigitalradio.com/netwatch/api.php"
+details_url = "https://newenglanddigitalradio.com/netwatch/"
+max_age_seconds = 5400
+request_timeout_seconds = 20
+
+[schedules.allstarnets]
+enabled = false
+url = "https://allstarnets.org/"
+details_url = "https://allstarnets.org/"
+max_age_seconds = 259200
+request_timeout_seconds = 25
+estimated_duration_minutes = 60
+# Managed installation enables the matching systemd timer only for explicitly enabled sources.
