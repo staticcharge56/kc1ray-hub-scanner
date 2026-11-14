@@ -28,7 +28,7 @@ def main():
     html = dashboard.render_html()
     import re
     from web_auth import LOGIN_HTML
-    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html+LOGIN_HTML, re.S)
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html+LOGIN_HTML.replace('__URL_PREFIX__','""'), re.S)
 
     node = shutil.which('node')
     if not node:

@@ -170,3 +170,18 @@ over them. Load/validate the retained configuration and run migration dry-run
 before switching versions. Do not run mixed versions against the same store:
 legacy code still writes/reads INI. The [Phase 4 lifecycle tool](installation.md) implements these preservation rules
 for its managed layout; unmanaged installations require explicit reviewed imports.
+
+## Apache URL prefix and proxy transport
+
+The preferred optional installer integration is described in [network access](network-access.md).
+`web.url_prefix` defaults to an empty string for existing standalone deployments;
+Apache mode sets `/hubscanner`. It must be one safe path component without a
+trailing slash. API paths in documentation are relative to this prefix. Cookies
+are scoped and named independently in prefix mode. Backend requests must retain
+the prefix; a proxy that strips it is incompatible with that setting.
+
+`web.http_proxy_origins` defaults empty. Apache HTTP selection deliberately adds
+its exact origin, also present in allowed_origins, enabling the private-client
+HTTP exception behind the explicitly trusted loopback proxy. Do not use this to
+trust arbitrary forwarding headers. HTTPS origins use the existing trusted-proxy
+transport and Secure cookies. All other auth and broker configuration is retained.

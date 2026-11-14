@@ -17,6 +17,7 @@ import pwd
 import re
 import shutil
 import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -69,6 +70,7 @@ AREAS={'program':APP,'config':CONF,'state':STATE,'monitor':MONITOR_STATE,'cache'
        'launcher':LAUNCHER,'tmpfiles':TMPFILES,'manifest':REGISTRY/'manifest.json'}
 AREAS.update({'unit-'+name:UNIT_DIR/name for name in UNITS})
 SAFE_ENV={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C.UTF-8'}
+APACHE_CONFIG=Path('/etc/apache2/conf-enabled/kc1ray-hub-scanner.conf')
 ASTERISK_SOCKET=Path('/run/asterisk/asterisk.ctl')
 SOCKET_GUIDE='docs/asterisk-socket-access.md'
 
@@ -190,6 +192,60 @@ class Host:
             return lan_candidates(json.loads(result.stdout), self)
         except (InstallError, OSError, ValueError, TypeError, KeyError, AttributeError):
             return []
+
+    def apache_sites(self):
+        if not self.command_exists('apache2ctl'):
+            return []
+        if self.run(['systemctl','is-active','--quiet','apache2.service'],check=False).returncode:
+            return []
+        self.run(['apache2ctl','configtest'])
+        modules=self.run(['apache2ctl','-M']).stdout
+        if not all(module+'_module' in modules for module in ('proxy','proxy_http','headers','rewrite')):
+            return []
+        includes=self.run(['apache2ctl','-t','-D','DUMP_INCLUDES']).stdout
+        files=re.findall(r'\((?:\*|\d+)\)\s+(/[^\s]+)',includes)
+        if any(not filename.startswith('/etc/apache2/') for filename in files):
+            raise InstallError('External Apache includes require manual integration review')
+        if not files:
+            raise InstallError('Cannot verify active Apache includes/listeners; manual integration review required')
+        ports=set()
+        for filename in files:
+            for line in self.path(filename).read_text().splitlines():
+                if not re.match(r'^\s*Listen\s',line,re.I):continue
+                match=re.fullmatch(r'\s*Listen\s+(?:(?:0\.0\.0\.0|\[::\]):)?(80|443)(?:\s+(?:http|https))?\s*(?:#.*)?',line,re.I)
+                if not match:
+                    raise InstallError('Apache integration supports only wildcard HTTP/80 and HTTPS/443 listeners')
+                ports.add(int(match[1]))
+        sites=apache_sites(self.run(['apache2ctl','-S']).stdout)
+        if {site['port'] for site in sites}!=ports:
+            raise InstallError('Apache listener/vhost mismatch; manual integration review required')
+        if any(site['port']==443 for site in sites):
+            context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname=False;context.verify_mode=ssl.CERT_NONE
+            for site in sites:
+                if site['port']!=443:continue
+                # Read only local TLS negotiation; no credentials or certificate generation.
+                try:
+                    with socket.create_connection(('127.0.0.1',443),timeout=3) as connection:
+                        with context.wrap_socket(connection,server_hostname=site['host']):pass
+                except OSError as exc:
+                    raise InstallError('Existing Apache HTTPS/443 did not pass local TLS negotiation') from exc
+        return sites
+
+    def firewall_running(self):
+        if not self.command_exists('firewall-cmd'):
+            return False
+        status=self.run(['firewall-cmd','--state'],check=False).returncode
+        if status not in (0,252):
+            raise InstallError('Cannot determine healthy firewalld state; LAN access is not ready')
+        return status==0
+
+    def firewall_has(self,record,permanent):
+        args=['firewall-cmd']+(['--permanent'] if permanent else [])
+        result=self.run(args+['--zone='+record['zone'],'--query-rich-rule='+firewall_rule(record)],check=False)
+        if result.returncode not in (0,1):
+            raise InstallError('firewalld query failed; LAN access is not ready')
+        return result.returncode==0
 
     def port_available(self,port,bind='127.0.0.1'):
         try:
@@ -364,8 +420,98 @@ def lan_candidates(interfaces,host):
                 continue
             address=ipaddress.IPv4Address(entry['local'])
             if any(address in network for network in private):
-                candidates.add((name,str(address)))
-    return [dict(interface=name,address=address) for name,address in sorted(candidates)]
+                candidates.add((name,str(address),str(ipaddress.IPv4Network(f'{address}/{entry["prefixlen"]}',strict=False))))
+    return [dict(interface=name,address=address,subnet=subnet) for name,address,subnet in sorted(candidates)]
+
+
+def firewall_rule(record):
+    if set(record)!={'zone','interface','address','subnet','port'}:
+        raise InstallError('Invalid tracked firewall record')
+    if not re.fullmatch(r'[A-Za-z0-9_-]+',record['zone']) or not re.fullmatch(r'[A-Za-z0-9_.-]+',record['interface']):
+        raise InstallError('Invalid tracked firewall zone/interface')
+    address=ipaddress.IPv4Address(record['address'])
+    subnet=ipaddress.IPv4Network(record['subnet'],strict=True)
+    if not any(subnet.subnet_of(ipaddress.IPv4Network(net)) for net in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16')) or address not in subnet:
+        raise InstallError('Firewall subnet must be a specific trusted RFC1918 network')
+    if type(record['port']) is not int or not 1024<=record['port']<=65535:
+        raise InstallError('Invalid tracked firewall port')
+    return (f'rule priority="32760" family="ipv4" source address="{subnet}" '
+            f'destination address="{address}/32" port port="{record["port"]}" protocol="tcp" accept')
+
+
+def apache_sites(output):
+    result=[];current=None
+    for address,port in re.findall(r'^\s*([^\s]+):(\d+)\s+',output,re.M):
+        if address not in ('*','_default_') or int(port) not in (80,443):
+            raise InstallError('Apache has address-specific/nonstandard vhosts; manual integration review required')
+    pattern=r'(?:port\s+(80|443)\s+namevhost\s+([A-Za-z0-9_.-]+)|[^\s]+:(80|443)\s+([A-Za-z0-9_.-]+))\s+\((/etc/apache2/[^\s:)]+):(\d+)\)'
+    defaults=set(re.findall(r'default server \S+ \((/etc/apache2/[^\s:)]+:\d+)\)',output))
+    for line in output.splitlines():
+        match=re.search(pattern,line)
+        if match:
+            port=int(match[1] or match[3]);host=(match[2] or match[4]).lower()
+            current=dict(id=match[5]+':'+match[6],host=host,port=port,scheme='https' if port==443 else 'http',aliases=[])
+            if current not in result:result.append(current)
+        elif current:
+            alias=re.fullmatch(r'\s+alias ([A-Za-z0-9_.*-]+)\s*',line)
+            if alias:current['aliases'].append(alias[1].lower())
+    pairs=[(site['host'],site['port']) for site in result]
+    if len(set(pairs))!=len(pairs):
+        raise InstallError('Apache has ambiguous duplicate server-name/port pairs; manual integration review required')
+    for site in result:
+        site['default']=site['id'] in defaults or sum(other['port']==site['port'] for other in result)==1
+    return result
+
+
+def apache_selection(sites,identifiers,origins=None):
+    selected=[site for site in sites if site['id'] in identifiers]
+    if len(selected)!=len(set(identifiers)):
+        raise InstallError('Selected Apache virtual host no longer exists or is incompatible')
+    if len({site['port'] for site in selected})!=len(selected):
+        raise InstallError('Select at most one virtual host per HTTP/HTTPS port')
+    result=[]
+    for site in selected:
+        if any('*' in alias for other in sites if other['port']==site['port'] for alias in other.get('aliases',[])):
+            raise InstallError('Wildcard Apache aliases require manual routing review')
+        origin=next((value for value in origins or [] if value.startswith(site['scheme']+'://')),None)
+        public=site['host'] if origin is None else origin[len(site['scheme'])+3:]
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+',public):
+            raise InstallError('Apache origin must be an exact scheme://hostname or IPv4 origin on port 80/443')
+        matches=[other for other in sites if other['port']==site['port'] and public.lower() in [other['host'],*other.get('aliases',[])]]
+        if matches and (len(matches)!=1 or matches[0]['id']!=site['id']):
+            raise InstallError('Apache origin belongs to another virtual host')
+        if not matches and (not site.get('default') or sum(other.get('default',False) and other['port']==site['port'] for other in sites)!=1 or any('*' in alias for other in sites if other['port']==site['port'] for alias in other.get('aliases',[]))):
+            raise InstallError('Origin is not an explicit alias or unambiguous default virtual host')
+        result.append(dict(id=site['id'],host=public.lower(),port=site['port'],scheme=site['scheme']))
+    if origins and set(origins)!={record['scheme']+'://'+record['host'] for record in result}:
+        raise InstallError('Supply one Apache origin per selected virtual host')
+    return result
+
+
+def apache_text(records):
+    if not records:
+        return ''
+    conditions=[]
+    for record in records:
+        if set(record)!={'id','host','port','scheme'} or not re.fullmatch(r'[A-Za-z0-9_.-]+',record['host']):
+            raise InstallError('Invalid tracked Apache selection')
+        if record['port'] not in (80,443) or record['scheme']!=('https' if record['port']==443 else 'http'):
+            raise InstallError('Apache selection must be an existing HTTP/80 or HTTPS/443 virtual host')
+        conditions.append(f"((tolower(%{{HTTP_HOST}}) == '{record['host']}' || tolower(%{{HTTP_HOST}}) == '{record['host']}:{record['port']}') && %{{SERVER_PORT}} == '{record['port']}' && %{{REQUEST_SCHEME}} == '{record['scheme']}')")
+    expression=' || '.join(conditions)
+    return ('# Managed by KC1RAY Hub Scanner; do not edit.\n'
+            '<LocationMatch "^/hubscanner(?:/|$)">\n'
+            f'  <If "{expression}">\n'
+            '    ProxyPreserveHost On\n'
+            '    ProxyAddHeaders Off\n'
+            '    RequestHeader unset Forwarded\n'
+            '    RequestHeader unset X-Forwarded-Host\n'
+            '    RequestHeader unset X-Forwarded-Prefix\n'
+            '    RequestHeader set X-Forwarded-For "expr=%{CONN_REMOTE_ADDR}"\n'
+            '    RequestHeader set X-Forwarded-Proto "expr=%{REQUEST_SCHEME}"\n'
+            '    RewriteEngine On\n'
+            '    RewriteRule "^" "http://127.0.0.1:8085%{REQUEST_URI}" [P,L,NE]\n'
+            '  </If>\n</LocationMatch>\n')
 
 
 def inspect(host,binary='/usr/sbin/asterisk'):
@@ -545,7 +691,129 @@ class Manager:
             if name not in UNITS or hashlib.sha256(self.host.path(UNIT_DIR/name).read_bytes()).hexdigest()!=digest:
                 raise InstallError('Managed unit was modified; preserve customizations as drop-ins before upgrading')
 
-    def plan(self,action,node=None,port=None,binary='/usr/sbin/asterisk',bind=None,config_template=None):
+    def apache_owned(self):
+        ledger=read_json(self.host,REGISTRY/'apache.json')
+        path=self.host.path(APACHE_CONFIG)
+        if ledger is None:
+            if path.exists() or path.is_symlink():
+                raise InstallError('Unmanaged Apache scanner configuration exists; refusing overwrite')
+            return []
+        apache_text(ledger['records'])
+        if path.is_symlink() or (path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() not in ledger['hashes']):
+            raise InstallError('Installer-owned Apache config was modified; preserve it and review manually')
+        if not path.exists() and not ledger['allow_missing']:
+            raise InstallError('Installer-owned Apache config is missing')
+        return ledger['records']
+
+    def apache_set(self,records,*,recover=False):
+        old=self.apache_owned()
+        text=apache_text(records)
+        path=self.host.path(APACHE_CONFIG)
+        if not old and not records and not path.exists():
+            return
+        if not recover and old==records and path.exists() and path.read_text()==text:
+            return
+        # Validate a separate candidate before any active configuration changes.
+        candidate=REGISTRY/'apache-candidate.conf'
+        if not recover:
+            atomic(self.host,candidate,text.encode(),0o600,0,0)
+            try:
+                self.host.run(['apache2ctl','-t','-c','Include "'+str(candidate)+'"'])
+            finally:
+                self.remove(candidate)
+        hashes=[hashlib.sha256(value).hexdigest() for value in
+                ([path.read_bytes()] if path.exists() else [])+([text.encode()] if text else [])]
+        json_write(self.host,REGISTRY/'apache.json',dict(records=records,hashes=hashes,allow_missing=not old or not records))
+        if text:
+            atomic(self.host,APACHE_CONFIG,text.encode(),0o644,0,0)
+        else:
+            self.remove(APACHE_CONFIG)
+        self.host.run(['apache2ctl','configtest'])
+        self.host.run(['systemctl','reload','apache2.service'])
+        json_write(self.host,REGISTRY/'apache.json',dict(records=records,hashes=[hashlib.sha256(text.encode()).hexdigest()] if text else [],allow_missing=not records))
+
+    def firewall_owned(self):
+        records=read_json(self.host,REGISTRY/'firewall.json') or []
+        if not isinstance(records,list):
+            raise InstallError('Invalid firewall ownership ledger')
+        for record in records:
+            firewall_rule(record)
+        return records
+
+    def firewall_plan(self,bind,port,remove=False):
+        owned=self.firewall_owned()
+        running=self.host.firewall_running()
+        if not running:
+            if owned:
+                raise InstallError('Tracked firewalld rules require running firewalld for safe reconciliation')
+            return dict(status='not-running-or-not-installed',installed=self.host.command_exists('firewall-cmd'),desired=[],owned=[],changes=[])
+        desired=[]
+        loopback=bind=='localhost' or bool(re.fullmatch(r'127\.[0-9]+\.[0-9]+\.[0-9]+',bind or ''))
+        if not remove and not loopback and port is None:
+            return dict(status='awaiting-port-selection',desired=[],owned=owned,changes=[])
+        if not remove and not loopback:
+            matches=[item for item in self.host.lan_addresses() if item['address']==bind]
+            if len(matches)!=1 or 'subnet' not in matches[0]:
+                raise InstallError('Cannot determine a unique trusted LAN interface/subnet; no firewall exposure authorized')
+            item=matches[0]
+            zone=self.host.run(['firewall-cmd','--get-zone-of-interface='+item['interface']]).stdout.strip()
+            record=dict(zone=zone,interface=item['interface'],address=bind,subnet=item['subnet'],port=port)
+            firewall_rule(record)
+            desired=[record]
+        changes=[]
+        for record in owned:
+            if record not in desired:
+                changes.append(dict(action='remove-owned',**record))
+        for record in desired:
+            permanent=self.host.firewall_has(record,True)
+            runtime=self.host.firewall_has(record,False)
+            if record not in owned and permanent!=runtime:
+                raise InstallError('Matching pre-existing firewall rule differs between runtime/permanent; operator review required')
+            if record not in owned and permanent and runtime:
+                changes.append(dict(action='preserve-preexisting',**record))
+            elif not permanent or not runtime:
+                changes.append(dict(action='ensure-owned',**record))
+        return dict(status='running',desired=desired,owned=owned,changes=changes)
+
+    def firewall_set(self,desired):
+        """Write ownership before mutation so failures/interruption remain recoverable."""
+        owned=self.firewall_owned()
+        for record in desired:
+            firewall_rule(record)
+        if not owned and not desired:
+            return
+        if not self.host.firewall_running():
+            raise InstallError('firewalld unavailable; tracked rules cannot be reconciled')
+        for record in list(owned):
+            if record not in desired:
+                for permanent in (False,True):
+                    if self.host.firewall_has(record,permanent):
+                        self.host.run(['firewall-cmd']+(['--permanent'] if permanent else [])+
+                                      ['--zone='+record['zone'],'--remove-rich-rule='+firewall_rule(record)])
+                        if self.host.firewall_has(record,permanent):
+                            raise InstallError('firewalld removal verification failed; tracked rule retained for recovery')
+                owned.remove(record)
+                json_write(self.host,REGISTRY/'firewall.json',owned)
+        for record in desired:
+            if record not in owned:
+                permanent=self.host.firewall_has(record,True)
+                runtime=self.host.firewall_has(record,False)
+                if permanent or runtime:
+                    if permanent and runtime:
+                        continue # Never adopt or remove an operator's identical rule.
+                    raise InstallError('Pre-existing firewall rule conflict; LAN access is not ready')
+                owned.append(record)
+                json_write(self.host,REGISTRY/'firewall.json',owned)
+            for permanent in (True,False):
+                if not self.host.firewall_has(record,permanent):
+                    self.host.run(['firewall-cmd']+(['--permanent'] if permanent else [])+
+                                  ['--zone='+record['zone'],'--add-rich-rule='+firewall_rule(record)])
+                if not self.host.firewall_has(record,permanent):
+                    raise InstallError('firewalld rule verification failed; LAN access is not ready')
+
+    def plan(self,action,node=None,port=None,binary='/usr/sbin/asterisk',bind=None,config_template=None,web_access=None,apache_vhosts=None,apache_origins=None):
+        if web_access not in (None,'apache','standalone'):
+            raise InstallError('Select apache or standalone web access')
         manifest=self.manifest()
         if action in ('install','upgrade'):
             if manifest:
@@ -601,13 +869,52 @@ class Manager:
             bind=bind or '127.0.0.1'
             if action=='install' and port is not None:
                 self.host.port_available(port,bind)
-            return dict(action=action,environment=env,node=node,port=port,bind=bind,lan_candidates=candidates,release=identity,migrations=migrations,
+            previous_apache=self.apache_owned()
+            if not previous_apache and manifest and not manifest.get('installed'):
+                previous_apache=manifest.get('apache',[])
+                apache_text(previous_apache) # Retained selection intent; never claims active file ownership.
+            selections=previous_apache
+            access=web_access or ('apache' if previous_apache else 'standalone')
+            sites=[]
+            policy=None
+            if access=='apache' or (not manifest and web_access is None and config_template is None):
+                sites=self.host.apache_sites()
+            if not manifest and web_access is None and sites and config_template is None:
+                access='selection-required'
+            if access=='apache':
+                identifiers=apache_vhosts or [site['id'] for site in previous_apache]
+                if not identifiers:
+                    if len(sites)!=1:
+                        raise InstallError('Choose --apache-vhost from detected sites; multiple or no compatible virtual hosts')
+                    identifiers=[sites[0]['id']]
+                selections=apache_selection(sites,identifiers,apache_origins or ([site['scheme']+'://'+site['host'] for site in previous_apache] if previous_apache else None))
+                if (action=='install' or (previous_apache and web_access is None)) and port not in (None,8085):
+                    raise InstallError('Apache mode requires the loopback backend port 8085')
+                bind,port='127.0.0.1',8085
+                if action=='install':self.host.port_available(port,bind)
+                origins=[site['scheme']+'://'+site['host'] for site in selections]
+                policy=dict(bind=bind,port=port,url_prefix='/hubscanner',allowed_origins=origins,
+                            trusted_proxies=['127.0.0.1/32'],allow_lan_http=False,
+                            http_proxy_origins=[origin for origin in origins if origin.startswith('http://')])
+            elif access=='standalone':
+                selections=[]
+                if previous_apache:
+                    policy=dict(url_prefix='',http_proxy_origins=[],trusted_proxies=[],
+                                allowed_origins=[] if bind=='127.0.0.1' else [f'http://{bind}:{port}'],allow_lan_http=bind!='127.0.0.1')
+            if previous_apache and web_access is None:
+                if (config['web']['bind'],config['web']['port'],config['web']['url_prefix'])!=('127.0.0.1',8085,'/hubscanner'):
+                    raise InstallError('Managed Apache backend policy changed; explicitly select the intended access method')
+                policy=None # Ordinary upgrades preserve all operator TOML bytes and proxy policy.
+            if policy and manifest and all(config['web'][key]==value for key,value in policy.items()):policy=None
+            firewall=self.firewall_plan(bind,port) if access!='selection-required' else dict(status='awaiting-web-access-selection',desired=[],owned=[],changes=[])
+
+            return dict(action=action,web_access=access,apache_sites=sites,apache=selections,web_policy=policy,firewall=firewall,environment=env,node=node,port=port,bind=bind,lan_candidates=candidates,release=identity,migrations=migrations,
                         retained=bool(manifest and not manifest.get('installed')),schemas=SCHEMAS,
                         http_warning='LAN HTTP does not encrypt credentials or sessions' if bind!='127.0.0.1' else None,
                         paths={key:str(value) for key,value in AREAS.items() if not key.startswith('unit-')})
         if not manifest:
             raise InstallError('No managed installation registry')
-        return dict(action=action,installed=manifest.get('installed'),data_retained_by_default=True)
+        return dict(action=action,apache_remove=self.apache_owned(),web_access='remove-owned',firewall=self.firewall_plan('127.0.0.1',None,remove=True),installed=manifest.get('installed'),data_retained_by_default=True)
 
     def stage(self,inventory,identity):
         releases=self.host.path(APP/'releases')
@@ -757,7 +1064,7 @@ class Manager:
         identifier=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:12]
         base=REGISTRY/'backups'/identifier
         mkdir(self.host,base,0o700)
-        metadata={'id':identifier,'areas':{},'services':states,'complete':False}
+        metadata={'id':identifier,'areas':{},'services':states,'firewall':self.firewall_owned(),'apache':self.apache_owned(),'complete':False}
         for area,logical in AREAS.items():
             source=self.host.path(logical)
             records={}
@@ -807,6 +1114,12 @@ class Manager:
         metadata=read_json(self.host,base/'snapshot.json')
         if not metadata or metadata.get('complete') is not True or set(metadata.get('areas',{}))!=set(AREAS):
             raise InstallError('Backup is incomplete or unsupported')
+        apache_text(metadata.get('apache',[]))
+        firewall=metadata.get('firewall',[])
+        if not isinstance(firewall,list):
+            raise InstallError('Invalid snapshot firewall metadata')
+        for record in firewall:
+            firewall_rule(record)
         for area,records in metadata['areas'].items():
             for relative,entry in records.items():
                 if Path(relative).is_absolute() or '..' in Path(relative).parts:
@@ -848,16 +1161,20 @@ class Manager:
                 self.host.chown(destination,entry['uid'],entry['gid'])
                 if entry['type']!='link':
                     destination.chmod(entry['mode'])
+        self.apache_set(metadata.get('apache',[]),recover=True)
+        self.firewall_set(metadata.get('firewall',[]))
         self.restore_services(metadata['services'])
 
     def apply(self,action,*,node=None,port=None,binary='/usr/sbin/asterisk',credentials=None,
-              favorites=None,netwatch=False,allstarnets=False,config_template=None,history=None,bind=None):
+              favorites=None,netwatch=False,allstarnets=False,config_template=None,history=None,bind=None,web_access=None,apache_vhosts=None,apache_origins=None):
         with self.lock():
-            plan=self.plan(action,node,port,binary,bind,config_template)
+            plan=self.plan(action,node,port,binary,bind,config_template,web_access,apache_vhosts,apache_origins)
+            if plan['web_access']=='selection-required':
+                raise InstallError('Compatible Apache detected: select --web-access apache (preferred) or standalone explicitly')
             if not plan['node'] or plan['port'] is None:
                 raise InstallError('Select node and port before execution')
             current=self.manifest()
-            if action=='upgrade' and current['release']==plan['release'] and not plan['migrations']:
+            if action=='upgrade' and current['release']==plan['release'] and not plan['migrations'] and not plan['web_policy'] and self.apache_owned()==plan['apache'] and not any(change['action']!='preserve-preexisting' for change in plan['firewall']['changes']):
                 return {'status':'unchanged','release':plan['release']}
             retained=plan['retained']
             if action=='install' and not retained:
@@ -891,7 +1208,10 @@ class Manager:
                 ids=self.identities(plan['environment']['asterisk_group'],create=True)
                 self.identities(plan['environment']['asterisk_group'])
                 if action=='install' and not retained:
-                    if bind is not None:
+                    if plan['web_policy']:
+                        config_template=deepcopy(config_template if config_template is not None else DEFAULTS)
+                        config_template['web'].update(plan['web_policy'])
+                    if bind is not None and plan['web_access']=='standalone':
                         config_template=deepcopy(config_template if config_template is not None else DEFAULTS)
                         config_template['web']['bind']=plan['bind']
                         config_template['web']['allow_lan_http']=plan['bind']!='127.0.0.1'
@@ -899,6 +1219,9 @@ class Manager:
                     config=self.init_data(ids,plan['node'],plan['port'],binary,credentials,favorites,netwatch,allstarnets,config_template,history)
                 else:
                     config=self.configuration() # retain bytes, credentials, favorites and all operator settings
+                if plan['web_policy'] and config['web']!=dict(config['web'],**plan['web_policy']):
+                    config['web'].update(plan['web_policy'])
+                    atomic(self.host,CONF/'config.toml',dump_toml(config),0o640,0,ids['groups']['kc1ray-read'])
                 self.host.check_radio_access(config['allstar']['local_node'],config['allstar']['asterisk_binary'])
                 release,inventory,identity=source_inventory(self.source)
                 if identity!=plan['release']:
@@ -906,6 +1229,8 @@ class Manager:
                 stage=self.stage(inventory,identity)
                 self.host.validate_candidate(stage)
                 units=self.write_units(plan['environment']['asterisk_group'],ids)
+                self.apache_set(plan['apache'])
+                self.firewall_set(plan['firewall']['desired'])
                 self.switch(identity)
                 if action=='upgrade':
                     self.restore_services(states)
@@ -916,7 +1241,7 @@ class Manager:
                     self.activate(config)
                 manifest={'package_schema':1,'installed':True,'schemas':SCHEMAS,'release':identity,
                           'inventory':inventory,'units':units,'asterisk_group':plan['environment']['asterisk_group'],
-                          'last_backup':backup,'migrations':plan['migrations']}
+                          'last_backup':backup,'migrations':plan['migrations'],'apache':plan['apache']}
                 json_write(self.host,REGISTRY/'manifest.json',manifest)
                 self.clear_transaction()
                 return {'status':'installed' if action=='install' else 'upgraded','release':identity,'backup':backup,
@@ -931,7 +1256,7 @@ class Manager:
                         raise InstallError('Operation failed and automatic rollback needs attention; retained backup '+backup) from failure
                 else:
                     self.restore_services(states)
-                detail='; '+str(failure) if isinstance(failure,RadioAccessError) else ''
+                detail='; '+str(failure) if isinstance(failure,InstallError) else ''
                 raise InstallError('Operation failed; previous files/services restored'+(' from '+backup if backup else '')+detail) from failure
 
     def clear_transaction(self):
@@ -1000,6 +1325,8 @@ class Manager:
                 self.stop(states)
                 backup=self.snapshot(states)
                 json_write(self.host,REGISTRY/'transaction.json',{'action':'uninstall','backup':backup})
+                self.apache_set([])
+                self.firewall_set([])
                 for name in UNITS:
                     if self.host.path(UNIT_DIR/name).exists():
                         self.host.run(['systemctl','disable',name])
@@ -1034,7 +1361,7 @@ def credential_input(source=None,username='admin'):
         return Path(source).read_bytes()
     if not sys.stdin.isatty():
         raise InstallError('Use an interactive terminal for hidden administrator setup, or provide an existing private --admin-credentials file')
-    password=getpass.getpass('Administrator passphrase (15+ characters): ')
+    password=getpass.getpass('Administrator passphrase (8+ characters): ')
     if password!=getpass.getpass('Confirm administrator passphrase: '):
         raise InstallError('Passphrases do not match')
     with tempfile.TemporaryDirectory() as directory:
@@ -1048,6 +1375,9 @@ def main():
     parser.add_argument('action',choices=('inspect','install','upgrade','rollback','uninstall'))
     parser.add_argument('--execute',action='store_true',help='Explicitly authorize local system changes; omitted means read-only plan')
     parser.add_argument('--source',type=Path,default=SOURCE)
+    parser.add_argument('--web-access',choices=('apache','standalone'))
+    parser.add_argument('--apache-origin',action='append',help='Exact http(s)://hostname/IPv4 origin; repeat once per selected host')
+    parser.add_argument('--apache-vhost',action='append',help='Explicit detected virtual-host ID; repeat for HTTP and HTTPS')
     parser.add_argument('--node')
     parser.add_argument('--port',type=int)
     parser.add_argument('--bind',help='Explicit offered private LAN IPv4 address, or 127.0.0.1; initial install only')
@@ -1071,6 +1401,10 @@ def main():
         parser.error('Purge options are uninstall-only')
     if args.backup and args.action!='rollback':
         parser.error('--backup is rollback-only')
+    if (args.apache_vhost or args.apache_origin) and args.web_access!='apache':
+        parser.error('--apache-vhost/--apache-origin require --web-access apache')
+    if (args.web_access or args.apache_vhost or args.apache_origin) and args.action not in ('install','upgrade'):
+        parser.error('Web access selection is install/upgrade only')
     host=Host()
     manager=Manager(host,args.source)
     try:
@@ -1082,12 +1416,18 @@ def main():
         if args.action=='inspect':
             result=inspect(host,binary)
             result['lan_candidates']=host.lan_addresses()
+            result['apache_sites']=host.apache_sites()
         elif not args.execute:
-            result=manager.plan(args.action,args.node,args.port,binary,args.bind,template)
+            result=manager.plan(args.action,args.node,args.port,binary,args.bind,template,args.web_access,args.apache_vhost,args.apache_origin)
             if args.action=='rollback':
                 if not args.backup:
                     raise InstallError('Rollback requires --backup ID')
-                manager.validate_snapshot(args.backup)
+                _,snapshot=manager.validate_snapshot(args.backup)
+                desired=snapshot.get('firewall',[])
+                if desired and not host.firewall_running():
+                    raise InstallError('Rollback needs running firewalld to restore tracked rules')
+                result['firewall']={'action':'restore-snapshot-owned-rules','desired':desired,'owned':manager.firewall_owned()}
+                result['apache']={'action':'restore-snapshot-owned-config','desired':snapshot.get('apache',[]),'owned':manager.apache_owned()}
             result['changes_performed']=False
             if args.action=='uninstall':
                 result['purge_requested']=args.purge
@@ -1100,7 +1440,13 @@ def main():
             if os.geteuid()!=0:
                 raise InstallError('Execution requires root on the target; no changes performed')
             if args.action in ('install','upgrade'):
-                plan=manager.plan(args.action,args.node,args.port,binary,args.bind,template)
+                plan=manager.plan(args.action,args.node,args.port,binary,args.bind,template,args.web_access,args.apache_vhost,args.apache_origin)
+                if plan['web_access']=='selection-required' and sys.stdin.isatty():
+                    args.web_access=input('Preferred Apache proxy, or standalone? [apache]: ').strip() or 'apache'
+                    if args.web_access=='apache' and len(plan['apache_sites'])!=1:
+                        for site in plan['apache_sites']:print(site['id']+' '+site['scheme']+'://'+site['host'])
+                        args.apache_vhost=input('Select virtual-host IDs, separated by commas: ').strip().split(',')
+                    plan=manager.plan(args.action,args.node,args.port,binary,args.bind,template,args.web_access,args.apache_vhost,args.apache_origin)
                 node,port=plan['node'],plan['port']
                 if node is None:
                     if not sys.stdin.isatty():
@@ -1111,12 +1457,12 @@ def main():
                     if not sys.stdin.isatty():
                         raise InstallError('Specify --port or select interactively')
                     port=int(input('Dashboard port [8085]: ').strip() or '8085')
-                if args.action=='install' and not plan['retained'] and template is None and args.bind is None and sys.stdin.isatty():
+                if args.action=='install' and not plan['retained'] and template is None and args.bind is None and plan['web_access']=='standalone' and sys.stdin.isatty():
                     print('LAN access is recommended only on a trusted LAN; HTTP does not encrypt credentials or sessions.')
                     for item in plan['lan_candidates']:
                         print(item['address']+' ('+item['interface']+')')
                     args.bind=input('Select an offered LAN IPv4 address, or Enter for localhost [127.0.0.1]: ').strip() or '127.0.0.1'
-                    manager.plan(args.action,node,port,binary,args.bind)
+                    manager.plan(args.action,node,port,binary,args.bind,template,args.web_access,args.apache_vhost,args.apache_origin)
                 credentials=None
                 favorites=None
                 history=args.history_source.read_bytes() if args.history_source else None
@@ -1129,7 +1475,7 @@ def main():
                         except json.JSONDecodeError:
                             favorites=parse_legacy(text,node)
                 result=manager.apply(args.action,node=node,port=port,binary=binary,credentials=credentials,
-                                     favorites=favorites,netwatch=args.netwatch,allstarnets=args.allstarnets,config_template=template,history=history,bind=args.bind)
+                                     favorites=favorites,netwatch=args.netwatch,allstarnets=args.allstarnets,config_template=template,history=history,bind=args.bind,web_access=args.web_access,apache_vhosts=args.apache_vhost,apache_origins=args.apache_origin)
             elif args.action=='rollback':
                 if not args.backup:
                     raise InstallError('Rollback requires --backup ID')

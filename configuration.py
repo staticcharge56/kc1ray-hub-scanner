@@ -15,7 +15,7 @@ DEFAULTS = {
               'runtime_dir': '/run/kc1ray-hub-scanner',
               'monitor_state_dir': '',
               'scanner_script': str(Path(__file__).resolve().parent / 'scanner.py')},
-    'web': {'allow_lan_http': False, 'bind': '127.0.0.1', 'port': 8085, 'controls_enabled': False,
+    'web': {'url_prefix': '', 'http_proxy_origins': [], 'allow_lan_http': False, 'bind': '127.0.0.1', 'port': 8085, 'controls_enabled': False,
             'refresh_seconds': 10, 'anonymous_view': False, 'allowed_origins': [],
             'trusted_proxies': [], 'request_timeout_seconds': 5, 'max_workers': 16},
     'auth': {'credentials_file': '/etc/kc1ray-hub-scanner/credentials.json',
@@ -80,6 +80,12 @@ def load_config(path=None):
             raise ValueError(f'{section}.{key} must be absolute')
     if not Path(data['allstar']['asterisk_binary']).is_absolute() or '\x00' in data['allstar']['asterisk_binary']:
         raise ValueError('allstar.asterisk_binary must be absolute')
+    prefix=data['web']['url_prefix']
+    if prefix and not re.fullmatch(r'/[a-zA-Z0-9_-]+',prefix):
+        raise ValueError('web.url_prefix must be empty or one safe path component without trailing slash')
+    for origin in data['web']['http_proxy_origins']:
+        if not isinstance(origin,str) or origin not in data['web']['allowed_origins'] or not origin.startswith('http://'):
+            raise ValueError('http_proxy_origins must be explicit allowed HTTP origins')
     bind = data['web']['bind']
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', bind):
         raise ValueError('web.bind must be an IPv4 address or host name (IPv6 is not supported yet)')
@@ -108,7 +114,7 @@ def load_config(path=None):
     for key in ('web_uid', 'service_uid', 'socket_gid'):
         if data['broker'][key] < -1:
             raise ValueError(f'broker.{key} must be -1 (unconfigured) or nonnegative')
-    for key in ('allowed_origins', 'trusted_proxies'):
+    for key in ('allowed_origins', 'trusted_proxies', 'http_proxy_origins'):
         if any(not isinstance(value, str) for value in data['web'][key]):
             raise ValueError(f'web.{key} must contain strings')
     for network in data['web']['trusted_proxies']:

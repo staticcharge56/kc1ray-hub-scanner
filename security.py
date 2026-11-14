@@ -27,7 +27,7 @@ class Denied(Exception):
 
 
 def password_digest(password, salt):
-    if not isinstance(password, str) or not 1 <= len(password.encode('utf-8')) <= 1024:
+    if not isinstance(password, str) or len(password)<8 or not 1 <= len(password.encode('utf-8')) <= 1024:
         raise ValueError('Invalid password length')
     return hashlib.scrypt(password.encode('utf-8'), salt=salt, n=SCRYPT_N, r=SCRYPT_R,
                           p=SCRYPT_P, maxmem=256*1024*1024, dklen=32)
@@ -36,8 +36,8 @@ def password_digest(password, salt):
 def create_credentials(path, username, password, *, replace=False):
     if not isinstance(username, str) or not username.isascii() or not username or len(username)>64 or not all(c.isalnum() or c in '_.-' for c in username):
         raise ValueError('Administrator name must be 1–64 ASCII letters, digits, _, . or -')
-    if not isinstance(password, str) or len(password)<15:
-        raise ValueError('Use a passphrase of at least 15 characters')
+    if not isinstance(password, str) or len(password)<8:
+        raise ValueError('Use a passphrase of at least 8 characters')
     salt = secrets.token_bytes(16)
     data = dict(version=1, username=username, algorithm='scrypt', n=SCRYPT_N, r=SCRYPT_R,
                 p=SCRYPT_P, salt=salt.hex(), digest=password_digest(password,salt).hex())
@@ -138,6 +138,9 @@ def request_context(headers,peer,web):
     lan_http=(web.get('allow_lan_http',False) and proto=='http'
               and origin==f'http://{web["bind"]}:{web["port"]}'
               and any(client in ipaddress.ip_network(net) for net in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16')))
+    lan_http=lan_http or (trusted and address.is_loopback and proto=='http'
+              and origin in web.get('http_proxy_origins',[])
+              and any(client in ipaddress.ip_network(net) for net in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16')))
     return RequestContext(origin,proto=='https',str(client),loopback,lan_http)
 
 
@@ -202,20 +205,20 @@ class Sessions:
             session.touched=time.monotonic()
 
 
-def cookie_token(headers):
+def cookie_token(headers,*,name=COOKIE):
     raw=headers.get('Cookie','')
-    if len(raw)>4096 or raw.count(COOKIE+'=')!=1:
+    if len(raw)>4096 or raw.count(name+'=')!=1:
         return None
     cookie=SimpleCookie()
     try:
         cookie.load(raw)
-        return cookie[COOKIE].value if COOKIE in cookie else None
+        return cookie[name].value if name in cookie else None
     except CookieError:
         return None
 
 
-def session_cookie(token,secure,*,delete=False):
-    value=f'{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict'
+def session_cookie(token,secure,*,delete=False,path='/',name=COOKIE):
+    value=f'{name}={token}; Path={path}; HttpOnly; SameSite=Strict'
     if secure:
         value+='; Secure'
     if delete:

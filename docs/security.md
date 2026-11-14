@@ -64,7 +64,7 @@ python3 -B manage_admin.py --credentials /absolute/local/dev/credentials.json --
 
 The parent directory must already exist. Passwords are prompted twice with
 `getpass`; they are not accepted as command-line arguments. Use a passphrase of
-at least 15 characters (at most 1,024 UTF-8 bytes). Initial setup is no-clobber;
+at least 8 characters (at most 1,024 UTF-8 bytes). Initial setup is no-clobber;
 `--replace` explicitly resets a hash. After a reset, restart the web process to
 invalidate its in-memory sessions and load the new credential file. Reset is not
 complete until that restart; credentials are not watched dynamically.
@@ -161,8 +161,12 @@ values; use a single controlled hop. Do not trust a broad network unnecessarily.
 Local processes capable of using a trusted loopback hop remain local trust peers.
 
 The application does not terminate TLS or set HSTS itself; certificate, TLS and
-HSTS policy belong to the HTTPS proxy. The root path is supported; URL-prefix
-mounting is not implemented. No proxy configuration was installed or tested live.
+HSTS policy belong to the HTTPS proxy. Root mode and an explicitly configured
+`web.url_prefix` are supported. Apache installation selects /hubscanner and scoped
+cookies; it never trusts X-Forwarded-Prefix. Explicit `http_proxy_origins` permit
+HTTP admin access only via the trusted loopback peer and private RFC1918 client
+addresses. These exceptions remain unencrypted; prefer an existing HTTPS host.
+See [Apache integration](network-access.md#preferred-existing-apache-at-hubscanner).
 
 ## Read access, destinations and command safety
 
@@ -268,3 +272,9 @@ OS-level compromise. Memory-only sessions/rate limits are not shared across mult
 web workers/processes; run one bounded threaded web process. Credentials reset
 requires restart to revoke all sessions. Existing asynchronous radio commands and
 single-link behavior remain unchanged pending separate control migration review.
+
+
+Apache path prefixes separate routing and cookie scope, not browser origins.
+Other applications on the selected origin (including AllScan) share its browser
+trust boundary. Keep those applications trusted and maintained; use a separately
+selected hostname/vhost when stronger origin separation is required.

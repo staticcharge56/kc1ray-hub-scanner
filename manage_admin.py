@@ -17,7 +17,7 @@ def main():
     if not sys.stdin.isatty():
         parser.exit(1,'Administrator setup requires an interactive terminal for hidden passphrase entry.\n')
     try:
-        password=getpass.getpass('New administrator passphrase (15+ characters): ')
+        password=getpass.getpass('New administrator passphrase (8+ characters): ')
         confirmation=getpass.getpass('Confirm passphrase: ')
         if password!=confirmation:
             raise ValueError('Passphrases do not match')

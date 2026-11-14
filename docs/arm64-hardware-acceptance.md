@@ -236,7 +236,7 @@ to execute it now. Use installation.md for exact lifecycle commands.
 2. Re-run the read-only plan against the exact reviewed source. Approve node,
    port, source checksum and backup location/free space. Only then use the
    documented install command with `--execute`. Keep both schedule integrations
-   off initially. Create the administrator interactively with a hidden 15+ character
+   off initially. Create the administrator interactively with a hidden 8+ character
    passphrase; never pass it through shell arguments or environment. Record backup
    IDs/release identity, not passwords. Installation starts/enables application
    units; it only queries Asterisk and does not start/restart/configure ASL.

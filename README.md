@@ -1,40 +1,63 @@
-# KC1RAY Hub Scanner — 0.5.0-beta
+# KC1RAY Hub Scanner — 0.5.1-beta
 
 An activity dashboard and favorites scanner for personal AllStarLink nodes on
 ASL3 / Debian 12. Includes live favorites, activity history, scheduled nets and
 authenticated FIRST, NEXT, STOP and direct connection controls.
 
 Hardware acceptance of 0.4.4 passed on a spare Debian 12 ARM64 Raspberry Pi
-running ASL3 Asterisk 22.10.1. Version **0.5.0-beta** is the first public-release
+running ASL3 Asterisk 22.10.1. Version **0.5.1-beta** is the first public-release
 candidate; the later LAN-first changes passed 336 local tests and still have an
 unreported installed-hardware acceptance gap. Other ASL3 versions and 32-bit
 hardware are not covered by the reported acceptance. See the
 [release review](docs/public-release-review.md) for remaining provenance concerns.
 
+Version 0.5.1-beta includes preferred Apache `/hubscanner/` integration,
+subnet-restricted firewalld management for standalone LAN mode, and an 8-character
+administrator password minimum. **371 tests passed**, including an isolated real
+Apache proxy test, with Python/JavaScript/shell/systemd checks. Live ASL3 Apache,
+HTTPS and firewalld acceptance of this increment remains required. See the
+[network access and recovery guide](docs/network-access.md).
+
 ## Install for your personal node
 
-Start with [the installation guide](docs/installation.md). The recommended workflow
-is an **explicitly selected private LAN IPv4 address**, so your browser or phone can
-reach the dashboard. The installer offers detected addresses but never selects one
-for you. Enter keeps localhost-only access; unattended installs also default to
-localhost. It never binds every interface automatically or changes your firewall,
-router, Tailscale, or Asterisk configuration.
+Start with [the installation guide](docs/installation.md). **An existing compatible
+Apache server is the preferred access method**, serving `/hubscanner/` beside
+AllScan's `/allscan/`. The Python backend remains `127.0.0.1:8085`; the installer does not open port 8085. No virtual-host file or certificate is replaced.
 
-From a reviewed local source checkout on your Debian 12 ASL3 Pi:
+Inspect first on your authorized Debian 12 ASL3 target:
 
 ```sh
 sudo sh ./install.sh inspect
-sudo sh ./install.sh install --node 1000 --port 8085 --bind 192.168.50.10
-# After reviewing the plan:
-sudo sh ./install.sh install --node 1000 --port 8085 --bind 192.168.50.10 --execute
 ```
 
-Replace `1000` with your local node and `192.168.50.10` with a private LAN address
-offered by `inspect`. Reserve the address in DHCP. The installer prompts for an
-administrator passphrase; there is no default password. Then open
-`http://192.168.50.10:8085` using your selected address and sign in.
-For localhost-only access use `--bind 127.0.0.1` and browse locally or through an
-SSH tunnel. Do not forward the HTTP port to the internet.
+Choose a reported `apache_sites` ID, then preview, for example:
+
+```sh
+sudo sh ./install.sh install --node 1000 --web-access apache \
+  --apache-vhost /etc/apache2/sites-enabled/000-default.conf:1 \
+  --apache-origin http://192.168.50.10
+```
+
+Replace the node, exact reported virtual-host ID and browser origin. Add a second
+`--apache-vhost` and `--apache-origin https://YOUR_HOST` to include an existing HTTPS
+host; no certificate is generated. Multiple hosts require explicit selection.
+Only after reviewing the plan, repeat the command with `--execute`. The installer
+prompts for an administrator password of at least 8 characters. Then browse the
+selected origin plus `/hubscanner/`. HTTP still leaves credentials and sessions
+unencrypted; HTTPS is preferred when already available.
+
+Standalone LAN access remains available:
+
+```sh
+sudo sh ./install.sh install --node 1000 --web-access standalone \
+  --port 8085 --bind 192.168.50.10
+```
+
+Use an offered private LAN address and add `--execute` only after plan review.
+Then browse `http://YOUR_LAN_IP:8085`. This mode retains subnet-restricted firewalld
+management. Use `--bind 127.0.0.1` for localhost-only standalone access. The installer
+never changes router forwarding, generates certificates, or alters Asterisk settings.
+See [Apache selection, recovery and limitations](docs/network-access.md).
 
 Controls and favorites changes initially remain in maintenance mode. After
 checking sign-in, edit `/etc/kc1ray-hub-scanner/config.toml`, set
@@ -113,7 +136,8 @@ Git additions, along with runtime state. Ignore rules do not remove tracked file
 or sanitize Git history; a separate publication review is still required.
 
 The installer never modifies Asterisk configuration, DTMF mappings, existing
-hooks, Tailscale or firewall settings. It detects missing prerequisites rather
+hooks or Tailscale. Running firewalld receives a tracked LAN-subnet-only rule;
+other firewall rules remain untouched. It detects missing prerequisites rather
 than installing/upgrading ASL3 or running package downloads automatically. The reported hardware acceptance applies to Debian 12 ARM64 with ASL3 Asterisk 22.10.1.
 
 ## License

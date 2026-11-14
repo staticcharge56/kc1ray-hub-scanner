@@ -7,6 +7,11 @@ asterisk_binary = "/usr/sbin/asterisk"
 # Hub Scanner manages link transitions in application code; no Asterisk hooks required.
 
 [web]
+# Apache integration sets /hubscanner; standalone keeps an empty prefix.
+url_prefix = ""
+# Explicit HTTP origins allowed only via a trusted loopback proxy and RFC1918 clients.
+# The installer populates these only when an HTTP Apache host is selected.
+http_proxy_origins = []
 # Recommended: explicitly select a detected private LAN IPv4 during installation.
 # Localhost remains the fallback; never use 0.0.0.0 for the LAN workflow.
 bind = "127.0.0.1"

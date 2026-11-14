@@ -4,6 +4,11 @@ The API is same-origin and has no CORS allowlist. It defaults to local loopback
 access with private viewing. See [security.md](security.md) for the trust model,
 TLS proxy settings, limits and service identities.
 
+In managed Apache mode prepend `/hubscanner` to every route below (for example
+`GET /hubscanner/api/session`). Standalone root mode keeps the listed paths.
+Browser code uses the configured prefix, and cookies are scoped to that prefix.
+Never infer a prefix from untrusted forwarded headers.
+
 ## Authentication sequence
 
 1. `GET /api/session` obtains an unprivileged HttpOnly cookie and a JSON `csrf`

@@ -824,7 +824,7 @@ def render_html(nonce=None):
     nonce = nonce or secrets.token_urlsafe(24)
     return HTML.replace('__LOCAL_NODE__', LOCAL_NODE).replace(
         '__PUBLIC_CONFIG__', json.dumps(public).replace('<', r'\u003c')).replace(
-        '__APP_AUTH__', APP_AUTH).replace('<script>', '<script nonce="'+nonce+'">')
+        '__APP_AUTH__', APP_AUTH).replace('__URL_PREFIX__',json.dumps(CONFIG['web']['url_prefix'])).replace('href="/login"','href="'+CONFIG['web']['url_prefix']+'/login"').replace('<script>', '<script nonce="'+nonce+'">')
 
 
 def favorite_numbers():
@@ -927,13 +927,18 @@ class Handler(BaseHTTPRequestHandler):
     def prepare(self):
         self.response_headers=[]
         self.csp_nonce=secrets.token_urlsafe(24)
+        prefix=CONFIG['web']['url_prefix']
+        if prefix:
+            if self.path!=prefix and not self.path.startswith(prefix+'/'):
+                raise Denied(404,'Not found')
+            self.path=self.path[len(prefix):] or '/'
         self.context=request_context(self.headers,self.client_address[0],CONFIG['web'])
         for name in ('Origin','X-CSRF-Token','Cookie'):
             if len(self.headers.get_all(name,[]))>1:
                 raise Denied(400,'Duplicate security header')
         self.auth=self.server.security
         self.auth.rates.take(('read',self.context.client),CONFIG['auth']['read_attempts'],CONFIG['auth']['read_window_seconds'])
-        self.token=cookie_token(self.headers)
+        self.token=cookie_token(self.headers,name=self.prefix_cookie_name()) if prefix else cookie_token(self.headers)
         self.session=self.auth.sessions.lookup(self.token,self.context.secure)
         if self.session and self.session.username and not self.context.transport_allowed:
             raise Denied(403,'HTTPS required for administrator access')
@@ -980,11 +985,20 @@ class Handler(BaseHTTPRequestHandler):
             self.auth.rates.take(('sensitive',self.session.username),CONFIG['auth']['sensitive_attempts'],CONFIG['auth']['sensitive_window_seconds'])
         self.auth.sessions.touch(self.session)
 
+    def prefix_cookie_name(self):
+        return 'kc1ray_hubscanner_secure_session' if self.context.secure else 'kc1ray_hubscanner_session'
+
+    def session_header(self,token,*,delete=False):
+        prefix=CONFIG['web']['url_prefix']
+        if not prefix:
+            return session_cookie(token,self.context.secure,delete=delete)
+        return session_cookie(token,self.context.secure,delete=delete,path=prefix+'/',name=self.prefix_cookie_name())
+
     def session_response(self):
         if self.session is None:
             self.auth.rates.take(('bootstrap',self.context.client),CONFIG['auth']['login_attempts']*2,CONFIG['auth']['login_window_seconds'])
             self.token,self.session=self.auth.sessions.create(self.context.secure)
-            self.response_headers.append(('Set-Cookie',session_cookie(self.token,self.context.secure)))
+            self.response_headers.append(('Set-Cookie',self.session_header(self.token)))
         self.json_body(200,{'authenticated':self.session.username is not None,
                             'csrf':self.session.csrf,'transport_safe':self.context.transport_allowed,'unencrypted_lan':self.context.lan_http})
 
@@ -994,7 +1008,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path in ('/','/login'):
                 signed_in=self.session is not None and self.session.username is not None
                 if self.path=='/login' or (not signed_in and not CONFIG['web']['anonymous_view']):
-                    html=LOGIN_HTML.replace('__NONCE__',self.csp_nonce)
+                    html=LOGIN_HTML.replace('__NONCE__',self.csp_nonce).replace('__URL_PREFIX__',json.dumps(CONFIG['web']['url_prefix']))
                 else:
                     self.auth.authorize(self.session,None,anonymous=CONFIG['web']['anonymous_view'])
                     html=render_html(self.csp_nonce)
@@ -1024,11 +1038,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             self.prepare()
+            if self.path in ('/api/control','/api/favorites') and not CONFIG['web']['controls_enabled']:
+                raise Denied(403,'Mutations disabled by configuration')
             self.check_origin()
             if self.path=='/api/auth/login':
                 payload=self.read_json()
                 token,session=self.auth.login(self.context,self.token,self.session,self.headers.get('X-CSRF-Token'),payload)
-                self.response_headers.append(('Set-Cookie',session_cookie(token,self.context.secure)))
+                self.response_headers.append(('Set-Cookie',self.session_header(token)))
                 self.json_body(200,{'authenticated':True,'csrf':session.csrf})
                 return
             if self.path not in ('/api/control','/api/favorites','/api/auth/logout','/api/session/touch'):
@@ -1040,7 +1056,7 @@ class Handler(BaseHTTPRequestHandler):
                 if payload:
                     raise Denied(400,'Invalid logout request')
                 self.auth.sessions.revoke(self.token)
-                self.response_headers.append(('Set-Cookie',session_cookie('',self.context.secure,delete=True)))
+                self.response_headers.append(('Set-Cookie',self.session_header('',delete=True)))
                 self.json_body(200,{'authenticated':False})
             elif self.path=='/api/session/touch':
                 if payload:

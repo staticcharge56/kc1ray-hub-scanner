@@ -392,8 +392,6 @@ class GuardTests(OfflineCase):
 class UnchangedInterfaceTests(OfflineCase):
     def test_http_auth_and_read_handlers_are_unchanged(self):
         def protected(raw):
-            raw=raw.replace('not self.context.transport_allowed','not self.context.secure and not self.context.loopback')
-            raw=raw.replace("'transport_safe':self.context.transport_allowed,'unencrypted_lan':self.context.lan_http", "'transport_safe':self.context.secure or self.context.loopback")
             nodes=[]
             for node in ast.parse(raw).body:
                 if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in (
@@ -401,7 +399,7 @@ class UnchangedInterfaceTests(OfflineCase):
                     nodes.append(node)
             return hashlib.sha256(''.join(ast.dump(n,include_attributes=False) for n in nodes).encode()).hexdigest()
         expected=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())
-        self.assertEqual(protected((ROOT/'dashboard.py').read_text()),expected['dashboard_http_sha256'])
+        self.assertEqual(protected((ROOT/'dashboard.py').read_text()),expected['dashboard_prefix_http_sha256'])
 
 class BrokerTransitionIntegrationTests(OfflineCase):
     """Actual broker driver + scanner + parser/argv, with only Asterisk replaced."""

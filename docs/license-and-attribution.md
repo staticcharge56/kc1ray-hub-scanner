@@ -1,11 +1,11 @@
-# License and attribution — 0.5.0-beta
+# License and attribution — 0.5.1-beta
 
 The project owner has approved the MIT license and copyright attribution:
 "Copyright (c) 2026 KC1RAY Hub Scanner contributors". The complete license is in
 LICENSE and repeated below for installed distributions. Approval of the license
 does not independently verify the provenance of the supplied implementation.
 
-The runtime uses Python's standard library. Python, Debian, systemd, Asterisk/ASL3,
+The runtime uses Python's standard library. Python, Debian, systemd, Asterisk/ASL3, Apache HTTP Server,
 OpenSSL, and development tools retain their own licenses; they are prerequisites,
 not relicensed by this project's MIT notice. No pip/npm packages, downloaded
 libraries, fonts or images are bundled in the proposed public files. NetWatch,

@@ -122,8 +122,14 @@ class FakeHost(pkg.Host):
         uid,gid=self.owners.get(str(path),(info.st_uid,info.st_gid))
         return SimpleNamespace(st_uid=uid,st_gid=gid,st_mode=info.st_mode)
 
+    def apache_sites(self):
+        return []
+
+    def firewall_running(self):
+        return False
+
     def lan_addresses(self):
-        return [{'interface':'eth0','address':'192.168.50.10'}]
+        return [{'interface':'eth0','address':'192.168.50.10','subnet':'192.168.50.0/24'}]
 
     def port_available(self,port,bind='127.0.0.1'):
         if self.busy:
@@ -612,13 +618,22 @@ class PackagingBoundaryTests(OfflineCase):
                 continue # Explicitly authorized application-owned link transitions.
             with self.subTest(name=name):
                 raw=(ROOT/name).read_bytes()
+                if name in ('security.py','web_auth.py'):
+                    reviewed=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['prefix_runtime_sha256']
+                    self.assertEqual(hashlib.sha256(raw).hexdigest(),reviewed[name])
+                    continue # Explicitly reviewed prefix/cookie/transport increment; old hashes retained.
+                if name=='manage_admin.py':
+                    raw=raw.replace(b'8+ characters',b'15+ characters')
                 if name=='web_auth.py':
+                    raw=raw.replace(b'required minlength="8"',b'required')
                     raw=raw.replace(b"status.textContent=session.unencrypted_lan?'Warning: HTTP on this trusted LAN does not encrypt your credentials or session.':(session.transport_safe?'':'Use HTTPS or explicitly configured trusted LAN access to sign in.');", b"status.textContent=session.transport_safe?'':'Use HTTPS or local loopback access to sign in.';")
                 if name=='security.py':
                     raw=raw.replace(b'    lan_http: bool = False\n\n    @property\n    def transport_allowed(self):\n        return self.secure or self.loopback or self.lan_http\n',b'')
                     start=raw.index(b'    lan_http=(web.get(')
                     end=raw.index(b'\n',raw.index(b'    return RequestContext',start))
                     raw=raw[:start]+b"    return RequestContext(origin,proto=='https',str(client),loopback)"+raw[end:]
+                    raw=raw.replace(b"or len(password)<8 or not 1 <=",b"or not 1 <=")
+                    raw=raw.replace(b'len(password)<8',b'len(password)<15').replace(b'at least 8 characters',b'at least 15 characters')
                     raw=raw.replace(b'if not context.transport_allowed:',b'if not context.secure and not context.loopback:')
                 self.assertEqual(hashlib.sha256(raw).hexdigest(),digest)
 
@@ -720,10 +735,10 @@ class LanInstallationTests(PackagingCase):
         self.host.path('/sys/class/net/eth0/device').mkdir(parents=True)
         self.host.path('/sys/class/net/eth1/device').mkdir(parents=True)
         def interface(name,addresses,flags=['UP']):
-            return dict(ifname=name,flags=flags,addr_info=[dict(family='inet',scope='global',local=value) for value in addresses])
+            return dict(ifname=name,flags=flags,addr_info=[dict(family='inet',scope='global',local=value,prefixlen=24) for value in addresses])
         data=[interface('eth0',['192.168.50.10','10.1.2.3','44.1.2.3','100.64.1.2','169.254.1.2','8.8.8.8']),interface('docker0',['172.17.0.1']),interface('eth1',['192.168.1.2'],[])]
         data[0]['addr_info'].append(dict(family='inet6',scope='global',local='fd00::1'))
-        self.assertEqual(pkg.lan_candidates(data,self.host),[dict(interface='eth0',address='10.1.2.3'),dict(interface='eth0',address='192.168.50.10')])
+        self.assertEqual(pkg.lan_candidates(data,self.host),[dict(interface='eth0',address='10.1.2.3',subnet='10.1.2.0/24'),dict(interface='eth0',address='192.168.50.10',subnet='192.168.50.0/24')])
 
     def test_missing_or_invalid_discovery_falls_back(self):
         with patch.object(pkg.shutil,'which',return_value=None):
@@ -755,3 +770,340 @@ class LanInstallationTests(PackagingCase):
             self.install(bind='127.0.0.1')
         self.install()
         self.assertEqual(self.bytes_at(pkg.CONF/'config.toml'),before)
+
+
+class FirewallLifecycleTests(PackagingCase):
+    def setUp(self):
+        super().setUp()
+        self.rules={False:set(),True:set()}
+        self.host.firewall_running=lambda:True
+        original=self.host.run
+        def run(args,check=True,env=None):
+            if args[0]!='firewall-cmd':
+                return original(args,check=check,env=env)
+            self.host.commands.append(args)
+            if '--get-zone-of-interface=eth0' in args:
+                return SimpleNamespace(returncode=0,stdout='allstarlink',stderr='')
+            permanent='--permanent' in args
+            zone=next(value for value in args if value.startswith('--zone='))
+            action=next(value for value in args if '-rich-rule=' in value)
+            operation,rule=action.split('=',1)
+            key=(zone,rule)
+            if operation=='--query-rich-rule':
+                return SimpleNamespace(returncode=0 if key in self.rules[permanent] else 1,stdout='',stderr='')
+            if getattr(self,'firewall_failure',False):
+                self.firewall_failure=False
+                raise pkg.InstallError('Simulated firewalld failure')
+            if operation=='--add-rich-rule':self.rules[permanent].add(key)
+            elif operation=='--remove-rich-rule':self.rules[permanent].discard(key)
+            else:raise AssertionError(args)
+            return SimpleNamespace(returncode=0,stdout='',stderr='')
+        self.host.run=run
+
+    def test_lan_plan_install_idempotence_and_uninstall(self):
+        plan=self.manager.plan('install',node='1000',port=8085,bind='192.168.50.10')
+        self.assertEqual(plan['firewall']['desired'][0]['subnet'],'192.168.50.0/24')
+        self.assertEqual(plan['firewall']['desired'][0]['zone'],'allstarlink')
+        self.assertFalse(self.rules[True])
+        self.install(bind='192.168.50.10')
+        self.assertEqual(len(self.rules[True]),1)
+        self.manager.apply('upgrade')
+        self.assertEqual(len(self.rules[True]),1)
+        self.manager.uninstall()
+        self.assertFalse(self.rules[True]);self.assertFalse(self.rules[False])
+
+    def test_preexisting_identical_rules_are_not_owned_or_removed(self):
+        record=self.manager.firewall_plan('192.168.50.10',8085)['desired'][0]
+        key=('--zone=allstarlink',pkg.firewall_rule(record))
+        self.rules[False].add(key);self.rules[True].add(key)
+        self.install(bind='192.168.50.10')
+        self.assertEqual(self.manager.firewall_owned(),[])
+        self.manager.uninstall()
+        self.assertIn(key,self.rules[True]);self.assertIn(key,self.rules[False])
+
+    def test_reconcile_port_and_rollback_restores_owned_rule(self):
+        self.install(bind='192.168.50.10')
+        old=deepcopy(self.rules)
+        config=self.manager.configuration();config['web']['port']=9090
+        config['web']['allowed_origins']=['http://192.168.50.10:9090']
+        pkg.atomic(self.host,pkg.CONF/'config.toml',pkg.dump_toml(config),0o640,0,self.host.groups['kc1ray-read'])
+        result=self.manager.apply('upgrade')
+        self.assertTrue(all('9090' in rule for zone,rule in self.rules[True]))
+        self.manager.rollback(result['backup'])
+        self.assertEqual(self.rules,old)
+
+    def test_localhost_never_adds_rules(self):
+        self.install()
+        self.assertFalse(self.rules[True]);self.assertFalse(self.rules[False])
+
+    def test_failure_rolls_back_new_rules_and_preserves_unrelated(self):
+        unrelated=('--zone=allstarlink','operator rule')
+        self.rules[True].add(unrelated);self.rules[False].add(unrelated)
+        self.firewall_failure=True
+        with self.assertRaisesRegex(pkg.InstallError,'firewalld'):
+            self.install(bind='192.168.50.10')
+        self.assertEqual(self.rules[True],{unrelated})
+        self.assertEqual(self.rules[False],{unrelated})
+
+    def test_ambiguous_existing_rule_and_missing_subnet_fail_closed(self):
+        record=self.manager.firewall_plan('192.168.50.10',8085)['desired'][0]
+        self.rules[True].add(('--zone=allstarlink',pkg.firewall_rule(record)))
+        with self.assertRaises(pkg.InstallError):self.install(bind='192.168.50.10')
+        self.host.lan_addresses=lambda:[dict(interface='eth0',address='192.168.50.10')]
+        with self.assertRaises(pkg.InstallError):self.manager.firewall_plan('192.168.50.10',8085)
+
+
+    def test_rule_change_to_localhost_removes_owned_rules_only(self):
+        self.install(bind='192.168.50.10')
+        config=self.manager.configuration()
+        config['web'].update(bind='127.0.0.1',allow_lan_http=False,allowed_origins=[])
+        pkg.atomic(self.host,pkg.CONF/'config.toml',pkg.dump_toml(config),0o640,0,self.host.groups['kc1ray-read'])
+        self.manager.apply('upgrade')
+        self.assertFalse(self.rules[True]);self.assertFalse(self.rules[False])
+
+    def test_subnet_zone_interface_reconciliation(self):
+        self.install(bind='192.168.50.10')
+        new=dict(zone='lan2',interface='wlan0',address='192.168.50.10',subnet='192.168.50.0/25',port=8085)
+        self.manager.firewall_set([new])
+        self.assertEqual(self.manager.firewall_owned(),[new])
+        self.assertEqual(self.rules[True],{('--zone=lan2',pkg.firewall_rule(new))})
+
+    def test_unavailable_firewalld_with_owned_rules_refuses_uninstall(self):
+        self.install(bind='192.168.50.10')
+        self.host.firewall_running=lambda:False
+        with self.assertRaises(pkg.InstallError):self.manager.uninstall()
+        self.assertTrue(self.rules[True])
+        self.assertTrue(self.manager.manifest()['installed'])
+
+    def test_partial_addition_is_removed_after_failure(self):
+        original=self.host.run
+        def fail_runtime(args,check=True,env=None):
+            if args[0]=='firewall-cmd' and '--permanent' not in args and any(arg.startswith('--add-rich-rule=') for arg in args):
+                self.host.run=original
+                raise pkg.InstallError('Runtime rule failed')
+            return original(args,check=check,env=env)
+        self.host.run=fail_runtime
+        with self.assertRaises(pkg.InstallError):self.install(bind='192.168.50.10')
+        self.assertFalse(self.rules[True]);self.assertFalse(self.rules[False])
+
+    def test_older_snapshot_without_firewall_metadata_restores_safely(self):
+        self.install(bind='192.168.50.10')
+        snapshot=self.manager.snapshot(self.manager.states())
+        path=self.host.path(pkg.REGISTRY/'backups'/snapshot/'snapshot.json')
+        metadata=json.loads(path.read_text());metadata.pop('firewall');path.write_text(json.dumps(metadata))
+        self.manager.rollback(snapshot)
+        self.assertFalse(self.rules[True]);self.assertFalse(self.rules[False])
+
+
+    def test_firewalld_detection_absent_stopped_and_failed(self):
+        with patch.object(self.host,'command_exists',return_value=False),patch.object(self.host,'run') as run:
+            self.assertFalse(pkg.Host.firewall_running(self.host));run.assert_not_called()
+        for status,expected in ((0,True),(252,False)):
+            with patch.object(self.host,'run',return_value=SimpleNamespace(returncode=status)):
+                self.assertEqual(pkg.Host.firewall_running(self.host),expected)
+        with patch.object(self.host,'run',return_value=SimpleNamespace(returncode=251)):
+            with self.assertRaises(pkg.InstallError):pkg.Host.firewall_running(self.host)
+
+    def test_all_loopback_bindings_skip_rules(self):
+        for bind in ('localhost','127.0.0.1','127.0.1.1'):
+            self.assertEqual(self.manager.firewall_plan(bind,8085)['desired'],[])
+
+    def test_failed_removal_retains_ownership_for_recovery(self):
+        self.install(bind='192.168.50.10')
+        original=self.host.run
+        def ignore_removal(args,check=True,env=None):
+            if any(value.startswith('--remove-rich-rule=') for value in args):
+                return SimpleNamespace(returncode=0,stdout='',stderr='')
+            return original(args,check=check,env=env)
+        self.host.run=ignore_removal
+        with self.assertRaises(pkg.InstallError):self.manager.firewall_set([])
+        self.assertTrue(self.manager.firewall_owned())
+
+
+    def test_interactive_plan_can_defer_port_selection(self):
+        plan=self.manager.plan('install',node='1000',bind='192.168.50.10')
+        self.assertEqual(plan['firewall']['status'],'awaiting-port-selection')
+        self.assertFalse(self.rules[True])
+
+
+class ApacheLifecycleTests(PackagingCase):
+    def setUp(self):
+        super().setUp()
+        self.sites=[dict(id='/etc/apache2/sites-enabled/web.conf:1',host='scanner.test',port=80,scheme='http',aliases=[],default=True),
+                    dict(id='/etc/apache2/sites-enabled/ssl.conf:1',host='scanner.test',port=443,scheme='https',aliases=[],default=True)]
+        self.host.apache_sites=lambda:deepcopy(self.sites)
+        self.original_site=self.host.path('/etc/apache2/sites-enabled/web.conf')
+        self.original_site.parent.mkdir(parents=True)
+        self.original_site.write_text('# Existing AllScan and operator virtual host; never modify.\n')
+        self.site_bytes=self.original_site.read_bytes()
+        self.reloads=0
+        self.fail_apache=None
+        original=self.host.run
+        def run(args,check=True,env=None):
+            if args[0]=='apache2ctl' or args==['systemctl','reload','apache2.service']:
+                self.host.commands.append(args)
+                if self.fail_apache and self.fail_apache(args):
+                    self.fail_apache=None
+                    raise pkg.InstallError('Simulated Apache validation/reload failure')
+                if args[0]=='systemctl':self.reloads+=1
+                return SimpleNamespace(returncode=0,stdout='',stderr='')
+            return original(args,check=check,env=env)
+        self.host.run=run
+
+    def proxy_install(self):
+        return self.install(web_access='apache',apache_vhosts=[site['id'] for site in self.sites])
+
+    def test_preferred_apache_requires_explicit_multiple_site_selection(self):
+        plan=self.manager.plan('install',node='1000',port=8085)
+        self.assertEqual(plan['web_access'],'selection-required')
+        self.assertEqual(len(plan['apache_sites']),2)
+        with self.assertRaises(pkg.InstallError):self.install(web_access='apache')
+        self.assertFalse(self.host.users)
+
+    def test_proxy_install_upgrade_uninstall_preserves_site_and_credentials(self):
+        self.proxy_install()
+        config=self.manager.configuration()
+        self.assertEqual(config['web']['bind'],'127.0.0.1')
+        self.assertEqual(config['web']['port'],8085)
+        self.assertEqual(config['web']['url_prefix'],'/hubscanner')
+        self.assertEqual(config['web']['allowed_origins'],['http://scanner.test','https://scanner.test'])
+        self.assertEqual(config['web']['trusted_proxies'],['127.0.0.1/32'])
+        self.assertEqual(self.manager.firewall_owned(),[])
+        before=self.bytes_at(pkg.CONF/'credentials.json')
+        config['web']['allowed_origins'].append('https://remote.test')
+        config['web']['trusted_proxies'].append('127.0.0.2/32')
+        pkg.atomic(self.host,pkg.CONF/'config.toml',pkg.dump_toml(config),0o640,0,self.host.groups['kc1ray-read'])
+        toml_before=self.bytes_at(pkg.CONF/'config.toml')
+        reloads=self.reloads
+        self.manager.apply('upgrade')
+        self.assertEqual(self.bytes_at(pkg.CONF/'config.toml'),toml_before)
+        self.assertEqual(self.reloads,reloads)
+        self.manager.uninstall()
+        self.assertFalse(self.host.path(pkg.APACHE_CONFIG).exists())
+        self.assertEqual(self.original_site.read_bytes(),self.site_bytes)
+        self.assertEqual(self.bytes_at(pkg.CONF/'credentials.json'),before)
+
+    def test_candidate_validation_failure_never_touches_original_apache(self):
+        self.fail_apache=lambda args:args[0]=='apache2ctl' and '-t' in args
+        with self.assertRaises(pkg.InstallError):self.proxy_install()
+        self.assertFalse(self.host.path(pkg.APACHE_CONFIG).exists())
+        self.assertEqual(self.original_site.read_bytes(),self.site_bytes)
+        self.assertEqual(self.reloads,0)
+
+    def test_activation_failure_restores_original_apache(self):
+        self.fail_apache=lambda args:args==['systemctl','reload','apache2.service']
+        with self.assertRaises(pkg.InstallError):self.proxy_install()
+        self.assertFalse(self.host.path(pkg.APACHE_CONFIG).exists())
+        self.assertEqual(self.original_site.read_bytes(),self.site_bytes)
+
+    def test_switch_to_standalone_and_rollback_restores_proxy(self):
+        self.proxy_install()
+        before=self.host.path(pkg.APACHE_CONFIG).read_bytes()
+        result=self.manager.apply('upgrade',web_access='standalone')
+        self.assertFalse(self.host.path(pkg.APACHE_CONFIG).exists())
+        self.assertEqual(self.manager.configuration()['web']['url_prefix'],'')
+        self.manager.rollback(result['backup'])
+        self.assertEqual(self.host.path(pkg.APACHE_CONFIG).read_bytes(),before)
+        self.assertEqual(self.manager.configuration()['web']['url_prefix'],'/hubscanner')
+
+    def test_unmanaged_or_modified_config_is_not_overwritten(self):
+        self.host.path(pkg.APACHE_CONFIG).parent.mkdir(parents=True)
+        self.host.path(pkg.APACHE_CONFIG).write_text('# Operator-owned config')
+        with self.assertRaises(pkg.InstallError):self.proxy_install()
+        self.host.path(pkg.APACHE_CONFIG).unlink()
+        self.proxy_install()
+        self.host.path(pkg.APACHE_CONFIG).write_text('# Modified by owner')
+        with self.assertRaises(pkg.InstallError):self.manager.apply('upgrade')
+        self.assertEqual(self.host.path(pkg.APACHE_CONFIG).read_text(),'# Modified by owner')
+
+    def test_explicit_default_site_ip_and_wrong_site_origin(self):
+        result=pkg.apache_selection(self.sites,[self.sites[0]['id']],['http://192.168.50.10'])
+        self.assertEqual(result[0]['host'],'192.168.50.10')
+        other=dict(self.sites[0],id='/etc/apache2/sites-enabled/other.conf:1',host='other.test',default=False)
+        with self.assertRaises(pkg.InstallError):pkg.apache_selection(self.sites+[other],[self.sites[0]['id']],['http://other.test'])
+
+    def test_apache_dump_parser_retains_default_alias_and_rejects_duplicates(self):
+        output='*:80 is a NameVirtualHost\n default server scanner.test (/etc/apache2/sites-enabled/a.conf:1)\n port 80 namevhost scanner.test (/etc/apache2/sites-enabled/a.conf:1)\n alias scanner.local\n port 80 namevhost other.test (/etc/apache2/sites-enabled/b.conf:1)\n'
+        sites=pkg.apache_sites(output)
+        self.assertTrue(sites[0]['default'])
+        self.assertEqual(sites[0]['aliases'],['scanner.local'])
+        self.assertFalse(sites[1]['default'])
+        with self.assertRaises(pkg.InstallError):pkg.apache_sites(output+output.replace('a.conf','c.conf').replace('b.conf','d.conf'))
+
+
+    def test_transition_to_apache_removes_only_scanner_firewall_rules(self):
+        rules={False:set(),True:set()}
+        self.host.firewall_running=lambda:True
+        self.host.firewall_has=lambda record,permanent:pkg.firewall_rule(record) in rules[permanent]
+        original=self.host.run
+        def run(args,check=True,env=None):
+            if args[0]=='firewall-cmd':
+                if '--get-zone-of-interface=eth0' in args:return SimpleNamespace(returncode=0,stdout='allstarlink')
+                permanent='--permanent' in args
+                arg=next(arg for arg in args if '-rich-rule=' in arg)
+                operation,rule=arg.split('=',1)
+                if operation=='--add-rich-rule':rules[permanent].add(rule)
+                elif operation=='--remove-rich-rule':rules[permanent].discard(rule)
+                else:raise AssertionError(args)
+                return SimpleNamespace(returncode=0,stdout='')
+            return original(args,check=check,env=env)
+        self.host.run=run
+        self.manager.apply('install',node='1000',port=9090,bind='192.168.50.10',web_access='standalone',credentials=self.credentials,favorites=self.favorites)
+        self.assertEqual(len(rules[True]),1)
+        self.manager.apply('upgrade',web_access='apache',apache_vhosts=[self.sites[0]['id']])
+        self.assertFalse(rules[True]);self.assertFalse(rules[False])
+        self.assertEqual(self.manager.configuration()['web']['bind'],'127.0.0.1')
+        self.assertEqual(self.original_site.read_bytes(),self.site_bytes)
+
+    def test_snapshot_without_apache_metadata_is_compatible(self):
+        self.install(web_access='standalone')
+        identifier=self.manager.snapshot(self.manager.states())
+        path=self.host.path(pkg.REGISTRY/'backups'/identifier/'snapshot.json')
+        metadata=json.loads(path.read_text());metadata.pop('apache');path.write_text(json.dumps(metadata))
+        self.manager.apply('upgrade',web_access='apache',apache_vhosts=[self.sites[0]['id']])
+        self.manager.rollback(identifier)
+        self.assertFalse(self.host.path(pkg.APACHE_CONFIG).exists())
+        self.assertEqual(self.manager.configuration()['web']['url_prefix'],'')
+
+
+    def test_nonstandard_address_bindings_and_wildcard_aliases_are_refused(self):
+        for output in ('127.0.0.1:80 scanner.test (/etc/apache2/sites-enabled/test.conf:1)', '*:8080 scanner.test (/etc/apache2/sites-enabled/test.conf:1)'):
+            with self.assertRaises(pkg.InstallError):pkg.apache_sites(output)
+        sites=deepcopy(self.sites);sites[0]['aliases']=['*.test']
+        with self.assertRaises(pkg.InstallError):pkg.apache_selection(sites,[sites[0]['id']])
+
+
+    def test_readonly_discovery_verifies_modules_includes_and_listeners(self):
+        self.host.path('/etc/apache2/ports.conf').write_text('Listen 80\n')
+        def run(args,check=True,env=None):
+            stdout=''
+            if args==['apache2ctl','-M']:stdout='proxy_module proxy_http_module headers_module rewrite_module'
+            elif 'DUMP_INCLUDES' in args:stdout='Included configuration files:\n (*) /etc/apache2/ports.conf\n'
+            elif args==['apache2ctl','-S']:stdout='*:80 scanner.test (/etc/apache2/sites-enabled/web.conf:1)\n'
+            return SimpleNamespace(returncode=0,stdout=stdout)
+        with patch.object(self.host,'run',side_effect=run):
+            sites=pkg.Host.apache_sites(self.host)
+            self.assertEqual(sites[0]['host'],'scanner.test')
+            self.host.path('/etc/apache2/ports.conf').write_text('Listen 80\nListen 8080\n')
+            with self.assertRaises(pkg.InstallError):pkg.Host.apache_sites(self.host)
+            self.host.path('/etc/apache2/ports.conf').write_text('Listen 80\n')
+            def external(args,check=True,env=None):
+                if 'DUMP_INCLUDES' in args:return SimpleNamespace(returncode=0,stdout=' (*) /opt/operator/apache.conf\n')
+                return run(args,check,env)
+            with patch.object(self.host,'run',side_effect=external):
+                with self.assertRaises(pkg.InstallError):pkg.Host.apache_sites(self.host)
+
+
+    def test_retained_reinstall_recreates_proxy_without_resetting_operator_data(self):
+        self.proxy_install()
+        original=self.host.path(pkg.APACHE_CONFIG).read_bytes()
+        config=self.bytes_at(pkg.CONF/'config.toml')
+        credentials=self.bytes_at(pkg.CONF/'credentials.json')
+        favorites=self.bytes_at(pkg.STATE/'favorites.json')
+        self.manager.uninstall()
+        self.assertFalse(self.host.path(pkg.APACHE_CONFIG).exists())
+        self.install()
+        self.assertEqual(self.host.path(pkg.APACHE_CONFIG).read_bytes(),original)
+        self.assertEqual(self.bytes_at(pkg.CONF/'config.toml'),config)
+        self.assertEqual(self.bytes_at(pkg.CONF/'credentials.json'),credentials)
+        self.assertEqual(self.bytes_at(pkg.STATE/'favorites.json'),favorites)

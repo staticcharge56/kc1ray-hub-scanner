@@ -39,6 +39,18 @@ class CredentialsTests(OfflineCase):
             security.create_credentials(path,'admin',PASSWORD)
         self.assertEqual(path.read_bytes(),before)
 
+    def test_eight_character_password_creation_and_reset_boundary(self):
+        path=self.tmp/'boundary.json'
+        for password in ('','1234567'):
+            with self.assertRaises(ValueError):security.create_credentials(path,'admin',password)
+        security.create_credentials(path,'admin','12345678')
+        self.assertTrue(security.Credentials(path).verify('admin','12345678'))
+        before=path.read_bytes()
+        with self.assertRaises(ValueError):security.create_credentials(path,'admin','1234567',replace=True)
+        self.assertEqual(path.read_bytes(),before)
+        security.create_credentials(path,'admin','abcdefgh',replace=True)
+        self.assertTrue(security.Credentials(path).verify('admin','abcdefgh'))
+
     def test_unique_salts_and_explicit_reset(self):
         with patch.object(security,'password_digest',return_value=b'x'*32):
             a,b=self.tmp/'a.json',self.tmp/'b.json'
@@ -400,6 +412,61 @@ class HttpSecurityTests(OfflineCase):
         self.assertEqual(self.request('POST','/api/control',{'action':'first'},cookie|{'X-CSRF-Token':data['csrf'],'Origin':'http://'+host},peer=peer,host=host)[0],200)
 
 
+    def test_prefixed_https_auth_csrf_controls_logout_and_cookie_scope(self):
+        configuration.CONFIG['web'].update(url_prefix='/hubscanner',allowed_origins=['https://scanner.test'],trusted_proxies=['127.0.0.1/32'])
+        proxy={'X-Forwarded-Proto':'https','X-Forwarded-For':'192.168.50.11'}
+        status,headers,session=self.request('GET','/hubscanner/api/session',headers=proxy,host='scanner.test')
+        self.assertEqual(status,200)
+        self.assertIn('Path=/hubscanner/',headers['set-cookie'])
+        self.assertIn('kc1ray_hubscanner_secure_session=',headers['set-cookie'])
+        self.assertIn('; Secure',headers['set-cookie'])
+        values=proxy|{'Cookie':headers['set-cookie'].split(';')[0],'X-CSRF-Token':session['csrf'],'Origin':'https://scanner.test'}
+        status,headers,data=self.request('POST','/hubscanner/api/auth/login',{'username':'admin','password':PASSWORD},values,host='scanner.test')
+        self.assertEqual(status,200)
+        values.update(Cookie=headers['set-cookie'].split(';')[0],**{'X-CSRF-Token':data['csrf']})
+        self.assertEqual(self.request('POST','/hubscanner/api/control',{'action':'first'},values|{'X-CSRF-Token':'bad'},host='scanner.test')[0],403)
+        self.assertEqual(self.request('POST','/hubscanner/api/control',{'action':'first'},values,host='scanner.test')[0],200)
+        self.assertEqual(self.request('GET','/api/session',headers=proxy,host='scanner.test')[0],404)
+        status,headers,_=self.request('POST','/hubscanner/api/auth/logout',{},values,host='scanner.test')
+        self.assertEqual(status,200)
+        self.assertIn('Path=/hubscanner/',headers['set-cookie'])
+        self.assertIn('Max-Age=0',headers['set-cookie'])
+        self.assertEqual(self.request('POST','/hubscanner/api/control',{'action':'first'},values,host='scanner.test')[0],401)
+
+    def test_prefixed_http_session_is_not_reused_as_https_browser_session(self):
+        configuration.CONFIG['web'].update(url_prefix='/hubscanner',allowed_origins=['http://scanner.test','https://scanner.test'],http_proxy_origins=['http://scanner.test'],trusted_proxies=['127.0.0.1/32'])
+        proxy={'X-Forwarded-Proto':'http','X-Forwarded-For':'192.168.50.11'}
+        _,headers,session=self.request('GET','/hubscanner/api/session',headers=proxy,host='scanner.test')
+        values=proxy|{'Cookie':headers['set-cookie'].split(';')[0],'X-CSRF-Token':session['csrf'],'Origin':'http://scanner.test'}
+        _,headers,data=self.request('POST','/hubscanner/api/auth/login',{'username':'admin','password':PASSWORD},values,host='scanner.test')
+        self.assertTrue(data['authenticated'])
+        self.assertIn('kc1ray_hubscanner_session=',headers['set-cookie'])
+        cookie=headers['set-cookie'].split(';')[0]
+        status,headers,session=self.request('GET','/hubscanner/api/session',headers=proxy|{'X-Forwarded-Proto':'https','Cookie':cookie},host='scanner.test')
+        self.assertEqual(status,200)
+        self.assertFalse(session['authenticated'])
+        self.assertIn('kc1ray_hubscanner_secure_session=',headers['set-cookie'])
+        self.assertIn('; Secure',headers['set-cookie'])
+
+    def test_prefixed_maintenance_switch_and_page_urls(self):
+        configuration.CONFIG['web'].update(url_prefix='/hubscanner',controls_enabled=False)
+        self.assertEqual(self.request('POST','/hubscanner/api/control',{'action':'stop'})[0],403)
+        html=dashboard.render_html()
+        self.assertIn('href="/hubscanner/login"',html)
+        self.assertIn('const hubPrefix="/hubscanner"',html)
+        self.assertNotIn('__URL_PREFIX__',html)
+
+    def test_explicit_http_proxy_requires_trusted_peer_and_private_client(self):
+        configuration.CONFIG['web'].update(url_prefix='/hubscanner',allowed_origins=['http://scanner.test'],http_proxy_origins=['http://scanner.test'],trusted_proxies=['127.0.0.1/32'])
+        proxy={'X-Forwarded-Proto':'http','X-Forwarded-For':'192.168.50.11'}
+        _,_,session=self.request('GET','/hubscanner/api/session',headers=proxy,host='scanner.test')
+        self.assertTrue(session['transport_safe'])
+        self.assertTrue(session['unencrypted_lan'])
+        _,_,session=self.request('GET','/hubscanner/api/session',headers=proxy,peer='198.51.100.2',host='scanner.test')
+        self.assertFalse(session['transport_safe'])
+        _,_,session=self.request('GET','/hubscanner/api/session',headers=proxy|{'X-Forwarded-For':'198.51.100.2'},host='scanner.test')
+        self.assertFalse(session['transport_safe'])
+
     def test_private_lan_login_is_denied_without_explicit_opt_in(self):
         configuration.CONFIG['web'].update(bind='192.168.50.10',allowed_origins=['http://192.168.50.10:8085'])
         _,headers,session=self.request('GET','/api/session',peer='192.168.50.11',host='192.168.50.10:8085')
@@ -568,3 +635,12 @@ class LanConfigurationTests(OfflineCase):
             path.write_text('[web]\nbind = '+json.dumps(bind)+'\nallow_lan_http = true\nallowed_origins = '+json.dumps(origins)+'\n')
             with self.subTest(bind=bind),self.assertRaises(ValueError):
                 configuration.load_config(path)
+
+
+    def test_prefix_and_http_proxy_configuration_validation(self):
+        path=self.tmp/'prefix.toml'
+        path.write_text('[web]\nurl_prefix = "/hubscanner"\n')
+        self.assertEqual(configuration.load_config(path)['web']['url_prefix'],'/hubscanner')
+        for text in ('url_prefix = "/hubscanner/"', 'url_prefix = "//hubscanner"', 'url_prefix = "/a/b"', 'http_proxy_origins = [1]\nallowed_origins = [1]', 'http_proxy_origins = ["https://scanner.test"]\nallowed_origins = ["https://scanner.test"]'):
+            path.write_text('[web]\n'+text+'\n')
+            with self.subTest(text=text),self.assertRaises(ValueError):configuration.load_config(path)

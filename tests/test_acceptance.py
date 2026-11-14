@@ -6,6 +6,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
+import socket
+import http.server
 import tempfile
 import threading
 import time
@@ -201,3 +204,55 @@ class RealHttpIntegrationTests(unittest.TestCase):
             {'username':'operator','password':self.password},extra=headers)[0],200)
         # Actual cookie flags are checked by the shared request helper below.
         self.assertTrue(self.auth.sessions.items)
+
+
+@unittest.skipUnless(shutil.which('apache2') and Path('/usr/lib/apache2/modules/mod_proxy_http.so').exists(), 'Apache2 binary/modules unavailable for isolated proxy test')
+class IsolatedApacheTests(unittest.TestCase):
+    def test_real_apache_preserves_prefix_headers_and_other_site(self):
+        class Backend(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                raw=json.dumps(dict(path=self.path,host=self.headers.get('Host'),proto=self.headers.get('X-Forwarded-Proto'),client=self.headers.get('X-Forwarded-For'))).encode()
+                self.send_response(200);self.end_headers();self.wfile.write(raw)
+            def log_message(self,*args):pass
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Backend)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            with tempfile.TemporaryDirectory(prefix='kc1ray-isolated-apache-') as directory:
+                folder=Path(directory)
+                with socket.socket() as probe:
+                    probe.bind(('127.0.0.1',0));port=probe.getsockname()[1]
+                (folder/'allscan').mkdir();(folder/'allscan/index.html').write_text('unchanged AllScan fixture')
+                (folder/'hubscanner/api').mkdir(parents=True);(folder/'hubscanner/api/session').write_text('other site fixture')
+                text=f'ServerRoot "{folder}"\nServerName localhost\nDefaultRuntimeDir "{folder}"\nPidFile "{folder}/pid"\nErrorLog "{folder}/error.log"\nListen 127.0.0.1:{port}\n'
+                for name in ('mpm_event','authz_core','proxy','proxy_http','headers','rewrite'):
+                    text+=f'LoadModule {name}_module /usr/lib/apache2/modules/mod_{name}.so\n'
+                text+=f'User #{os.getuid()}\nGroup #{os.getgid()}\nDocumentRoot "{folder}"\n<Directory "{folder}">\nRequire all granted\n</Directory>\n'
+                text+=f'<VirtualHost 127.0.0.1:{port}>\nServerName localhost:80\n</VirtualHost>\n<VirtualHost 127.0.0.1:{port}>\nServerName other.test:80\n</VirtualHost>\n'
+                text+=pkg.apache_text([dict(id='/etc/apache2/sites-enabled/test.conf:1',host='localhost',port=80,scheme='http')]).replace(':8085',':'+str(server.server_port))
+                config=folder/'httpd.conf';config.write_text(text)
+                subprocess.run([shutil.which('apache2'),'-t','-f',str(config)],check=True,capture_output=True,timeout=5)
+                process=subprocess.Popen([shutil.which('apache2'),'-X','-f',str(config)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                try:
+                    deadline=time.monotonic()+5
+                    while True:
+                        try:
+                            connection=socket.create_connection(('127.0.0.1',port),timeout=.2);connection.close();break
+                        except OSError:
+                            if process.poll() is not None or time.monotonic()>deadline:raise RuntimeError('Isolated Apache startup failed')
+                            time.sleep(.03)
+                    for path in ('/hubscanner/','/hubscanner/api/session?x=1','/hubscanner/login'):
+                        connection=http.client.HTTPConnection('127.0.0.1',port,timeout=3)
+                        connection.request('GET',path,headers={'Host':'localhost','X-Forwarded-Proto':'https','X-Forwarded-For':'192.168.50.99'})
+                        response=connection.getresponse();data=json.loads(response.read());connection.close()
+                        self.assertEqual(response.status,200)
+                        self.assertEqual(data,dict(path=path,host='localhost',proto='http',client='127.0.0.1'))
+                    for path,host,status in (('/hubscanner/api/session','other.test',200),('/allscan/index.html','localhost',200)):
+                        connection=http.client.HTTPConnection('127.0.0.1',port,timeout=3);connection.request('GET',path,headers={'Host':host})
+                        response=connection.getresponse();raw=response.read();connection.close();self.assertEqual(response.status,status)
+                        if status==200:self.assertEqual(raw,b'other site fixture' if host=='other.test' else b'unchanged AllScan fixture')
+                finally:
+                    process.terminate()
+                    try:process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:process.kill();process.communicate(timeout=5)
+        finally:
+            server.shutdown();server.server_close();thread.join(timeout=3)

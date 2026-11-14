@@ -54,7 +54,7 @@ def wait_web():
         try:
             connection=http.client.HTTPConnection(host,CONFIG['web']['port'],timeout=1)
             try:
-                connection.request('GET','/login',headers={'Host':f'localhost:{CONFIG["web"]["port"]}'})
+                connection.request('GET',CONFIG['web']['url_prefix']+'/login',headers={'Host':f'localhost:{CONFIG["web"]["port"]}'})
                 response=connection.getresponse()
                 # A strict proxy-only configuration can correctly deny this direct probe.
                 if response.status in (200,403) and response.getheader('Server','').startswith('HubScanner'):

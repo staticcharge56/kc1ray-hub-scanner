@@ -1,30 +1,51 @@
-# Staged public-release review — 0.5.0-beta
+# Next beta review — 0.5.1-beta
 
 ## Status and evidence
 
-The first public-release candidate is **0.5.0-beta**, as recorded in
+The first public-release candidate is **0.5.1-beta**, as recorded in
 packaging/release.json. All four data/configuration schemas and the package schema
 remain version 1. The owner has approved MIT and the attribution
 "Copyright (c) 2026 KC1RAY Hub Scanner contributors". Root LICENSE and the complete
 notice in docs/license-and-attribution.md match. The latter is included by the
 existing installer, which does not copy the root LICENSE.
 
-This preparation changes release metadata and documentation only. Application
-behavior, configuration values, service templates and the 80-file publishing
-allowlist remain unchanged. No full test suite was rerun, no acceptance archive
-was built, and neither Pi was contacted. No commit, remote, tag, GitHub repository
-or publication was created.
+The current increment adds preferred managed Apache routing at `/hubscanner/`
+with explicit site/origin selection, a loopback-only backend, scoped HTTP/HTTPS
+sessions, prefix-aware UI/API/navigation and recoverable owned configuration.
+The completed firewalld and 8-character password changes are preserved. These
+changes remain unstaged; the index still contains the reviewed 0.5.0-beta tree.
 
-The previous LAN-first validation passed **336 tests** including syntax/systemd
-checks. The owner reports successful prior 0.4.4 acceptance on a spare Debian 12
-ARM64 Pi with ASL3 Asterisk 22.10.1: installation, authentication, favorites,
-monitoring, NetWatch, controls, state confirmation, upgrade/rollback, uninstall
-and retained-data reinstall. Those are prior results, not a new test of this
-metadata/documentation-only candidate.
+The full current suite passed **371 tests in 113.232 seconds** using
+`python3 -B tools/check.py`, with no failures, errors or skips. Python, embedded
+JavaScript, shell, systemd and Git whitespace checks passed. A real Apache process
+using temporary configuration and loopback ports verified unchanged prefixed paths,
+forwarding-header overwrite, nonselected-site content and AllScan-path coexistence.
+Modeled tests cover selection, scoped firewall removal, no-op/custom-policy upgrades,
+validation/reload failures, rollback, old snapshots, uninstall and retained-data
+reinstall. HTTP parser tests cover prefixed auth, CSRF, cookie paths, Secure flags,
+separate HTTP/HTTPS sessions, logout and maintenance mode. Original security and
+radio-control regression tests remain in the suite.
 
-## Actual local staging review
+Radio-control, monitoring, favorites, schedules and all seven service templates
+are byte-identical to the original staged baseline. Existing settings keep their
+values; new URL-prefix/proxy-HTTP keys default to standalone-safe behavior. The
+80-file public allowlist and release version 0.5.1-beta are unchanged. No archive,
+commit, remote, tag or publication was created; neither Pi was contacted. Real
+system Apache/firewall/Asterisk configuration was never modified by development.
 
-The local repository has been initialized on branch main with no commits or
+The owner reports prior 0.4.4 hardware acceptance; that and prior 336/352-test runs
+are historical evidence. Actual installation on the spare's Debian 12 ARM64 ASL3
+Apache, browser/HTTPS verification using its existing certificates, scoped firewalld
+behavior and reboot/lifecycle acceptance remain unverified for this increment.
+The local real-Apache fixture is not proof of that deployment's compatibility.
+Use the updated installer for recovery of new Apache/firewall metadata. Custom
+listeners, address-specific vhosts, wildcard aliases or external Apache includes
+are refused for manual integration review; current automatic support is standard
+wildcard HTTP/80 and HTTPS/443. No certificate is generated or virtual host replaced.
+
+## Historical staging review (0.5.0-beta)
+
+The original 0.5.0-beta local repository was initialized on branch main with no commits or
 remotes. Exactly **80 files** are staged, matching the existing
 packaging/public-files.txt allowlist. Staging contains source, installer, example
 configuration, seven systemd templates, admin/migration tools, tests and synthetic
@@ -34,8 +55,8 @@ The index review checks the actual staged object bytes and file modes against th
 allowlist and working files, rather than relying only on ignored-file patterns.
 Results: staged/allowlist equality, staged/working-file equality, safe file modes,
 secret-pattern review, local documentation links and `git diff --cached --check`
-all passed. There are no unstaged changes or nonignored untracked files. All
-Python/configuration/service-template bytes match the pre-preparation baseline.
+all passed at that review. There were no unstaged changes or nonignored untracked files. The prior Python/configuration/service-template bytes matched the original
+pre-preparation baseline; current installer/security changes supersede that claim.
 
 The 11 local historical source snapshots/runtime files are not staged. Neither
 are credentials, private configuration, operator favorites/history, caches,
@@ -90,7 +111,9 @@ documents retain their original test counts and are marked as historical.
 
 ## Owner commands — written only, not executed
 
-Use Bash from this reviewed repository. The index is prepared; do not run a broad
+Use Bash from this reviewed repository. The index still contains the prior beta; current changes are unstaged. After
+owner review, use `git add --pathspec-from-file=packaging/public-files.txt` and
+repeat the checks. Do not run a broad
 `git add .` or import historical data. Reinspect before any separately authorized
 commit. If files change, stage only the approved allowlist and repeat the review:
 
@@ -110,7 +133,7 @@ read -r -p 'Commit author name: ' COMMIT_NAME
 read -r -p 'Commit email (GitHub no-reply if desired): ' COMMIT_EMAIL
 git config user.name "$COMMIT_NAME"
 git config user.email "$COMMIT_EMAIL"
-git commit -m "Prepare KC1RAY Hub Scanner 0.5.0-beta"
+git commit -m "Prepare KC1RAY Hub Scanner 0.5.1-beta"
 git ls-tree -r --name-only HEAD
 git log --oneline --all
 ```

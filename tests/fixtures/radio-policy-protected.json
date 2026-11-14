@@ -1,4 +1,9 @@
 {
   "dashboard_ui_and_http_sha256": "53ca4e5aa9687599eb1b7c43fa3d6312b43710cc8e2df100f9f7bc78b8658864",
-  "dashboard_http_sha256": "2ecb3d6a56b744c0a5bd5868b29d06e5aba5aa84d5414922759668285e1fa04a"
+  "dashboard_http_sha256": "2ecb3d6a56b744c0a5bd5868b29d06e5aba5aa84d5414922759668285e1fa04a",
+  "dashboard_prefix_http_sha256": "8ce5e8d1eaac35fce0e9d7f77c34e67e0b9a218b542eab7456a348dc61799921",
+  "prefix_runtime_sha256": {
+    "security.py": "8844eae258637f9e43b99bb3ebde78baf8959be981d2f2a069f9a0c29ba5f15c",
+    "web_auth.py": "04aed9bcca649451f9d4555cc04d439744e1884c05b3684db2f85aea65c0f880"
+  }
 }

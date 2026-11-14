@@ -1,6 +1,6 @@
 # Installation, upgrade, rollback and removal
 
-Version 0.5.0-beta is prepared for first public release. These
+Version 0.5.1-beta is prepared for first public release. These
 commands are instructions for a **separately authorized Debian 12 ASL3 target or
 disposable acceptance environment**. They have not been run on the production Pi
 or used to install services on the Linux Mint development host.
@@ -31,6 +31,11 @@ a release-signature distribution system. File hashes detect changes/corruption,
 not publisher authenticity. The owner has approved MIT; see
 [license and provenance](license-and-attribution.md).
 
+For LAN installations with running firewalld, review the subnet/zone rules in the
+dry run. The installer updates only its tracked rich rules, without a global
+reload. See [network access](network-access.md) for ownership, rollback, uninstall
+and inactive-firewalld behavior.
+
 ## ASL3 owner-access socket compatibility
 
 An `asterisk:asterisk` control socket at mode0755 is a recognized ASL3 layout,
@@ -43,11 +48,19 @@ mode0755 can remain unchanged.
 
 ## 1. Inspect and review a plan
 
+A compatible existing Apache is the preferred method. Inspect `apache_sites`, then
+select `--web-access apache`, explicit `--apache-vhost` IDs and exact origins as
+shown in [Apache instructions](network-access.md#preferred-existing-apache-at-hubscanner).
+The example below is the standalone alternative; add `--web-access standalone`
+when Apache is available and you want the direct-port workflow. Existing upgrades
+retain their method unless explicitly changed.
+
+
 On the intended disposable/authorized target, from the reviewed source directory:
 
 ```sh
 sudo sh ./install.sh inspect
-sudo sh ./install.sh install --node 1000 --port 8085 --bind 192.168.50.10
+sudo sh ./install.sh install --node 1000 --web-access standalone --port 8085 --bind 192.168.50.10
 ```
 
 Replace synthetic node `1000` with your node, and `192.168.50.10` with an address
@@ -80,7 +93,7 @@ system account ranges and stored in the generated configuration; none are guesse
 Only after separate authorization to change that target:
 
 ```sh
-sudo sh ./install.sh install --node 1000 --port 8085 --bind 192.168.50.10 --execute
+sudo sh ./install.sh install --node 1000 --web-access standalone --port 8085 --bind 192.168.50.10 --execute
 ```
 
 Review the dry-run plan before repeating it with --execute. Selecting a LAN bind
@@ -89,7 +102,7 @@ Reserve that address in DHCP. Never forward this HTTP port from the internet.
 A missing node or port is prompted on an interactive terminal. An interactive fresh
 install without --bind offers LAN choices and defaults to localhost on Enter.
 Noninteractive omission retains localhost; no LAN address is chosen automatically. The default port
-prompt offers 8085. The passphrase is prompted twice, hidden, with at least 15
+prompt offers 8085. The passphrase is prompted twice, hidden, with at least 8
 characters. There is no default password, plaintext password argument or password
 environment variable. Noninteractive installation requires an existing private
 scrypt file created using `manage_admin.py` and the `--admin-credentials` option.
@@ -105,7 +118,9 @@ checks readiness. It never submits connect/disconnect commands during install.
 Failure triggers restoration of the prior files and service states. Allocated
 non-login identities remain registered so retrying does not recycle UIDs.
 
-Without an explicit selection the installation binds to `127.0.0.1`. Fresh installations without configuration imports disable anonymous viewing and keep
+Without a compatible Apache or an explicit standalone LAN selection, the
+installation binds to `127.0.0.1`. With compatible Apache, fresh execution requires
+a method choice; Apache mode always uses 127.0.0.1:8085. Fresh installations without configuration imports disable anonymous viewing and keep
 `controls_enabled=false`. Sign-in works, but radio/favorites writes remain in
 maintenance mode until the owner reviews configuration and explicitly changes
 that setting. All writes still require admin + CSRF after enabling it. The
@@ -161,7 +176,7 @@ Do not enable anonymous viewing to resolve a sign-in problem.
 Enable sources explicitly during initial installation:
 
 ```sh
-sudo sh ./install.sh install --node 1000 --port 8085 --bind 192.168.50.10 --netwatch --allstarnets --execute
+sudo sh ./install.sh install --node 1000 --web-access standalone --port 8085 --bind 192.168.50.10 --netwatch --allstarnets --execute
 ```
 
 This is an initial-install variant of the reviewed plan, not a second installation
@@ -183,7 +198,7 @@ preserve existing enabled/running unit states, not newly inferred operator inten
 Use `systemctl edit` drop-ins for timer cadence changes; do not edit generated
 base units. Drop-ins are retained unless a confirmed purge removes them.
 
-The installer never changes Tailscale, Funnel, firewall, router port forwarding,
+The installer never changes Tailscale, Funnel, alternative firewalls, router port forwarding,
 TLS certificates or internet exposure. Follow [security.md](security.md) to choose
 an exact HTTPS origin and trusted proxy address. A proxy must preserve Host and
 safely set the accepted protocol/client headers. Built-in admin login remains
@@ -331,7 +346,8 @@ sudo sh /absolute/trusted-checkout/install.sh uninstall --execute
 Configuration, administrator hash, favorites, monitor history, caches, backups,
 unit drop-ins and non-login service identities remain. Reinstallation reuses the
 registered identities and retained data. Asterisk services/configs, existing hooks,
-Tailscale and firewall settings are untouched.
+Tailscale and unrelated firewall settings are untouched; tracked scanner rich rules
+are removed. See [firewalld lifecycle](network-access.md#installer-managed-firewalld-rules-051-beta).
 
 Only an explicitly confirmed purge deletes managed config/data/caches/drop-ins and
 backups as well:
