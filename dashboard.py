@@ -235,6 +235,25 @@ function netForNode(node, nowSeconds) {
   return {current, upcoming};
 }
 
+let nodeDescriptions = Object.create(null);
+function rememberNodeDescriptions(data) {
+  // Reuse the local activity cache; a failed refresh leaves prior metadata intact.
+  if (!(Number(data.updated)>0) || !Array.isArray(data.favorites)) return;
+  const descriptions=Object.create(null);
+  for (const f of data.favorites) {
+    if (typeof f.node_description==='string' && f.node_description.trim()) {
+      descriptions[String(f.node)]=f.node_description.trim();
+    }
+  }
+  nodeDescriptions=descriptions;
+  document.dispatchEvent(new Event('node-descriptions-updated'));
+}
+function nodeInfoLine(node, status='') {
+  const description=nodeDescriptions[String(node)];
+  const labels={active:'Active',idle:'Idle',unknown:'Unknown'};
+  return ['Node '+node,description,labels[status] || status].filter(Boolean).join(' - ');
+}
+
 function render() {
   const now = Date.now() / 1000;
   const age = Math.max(0, Math.floor(now - cacheUpdated));
@@ -279,7 +298,7 @@ function render() {
     name.textContent = f.name;
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = 'Node ' + f.node + ' · ' + f.displayStatus;
+    meta.textContent = nodeInfoLine(f.node, f.displayStatus);
     details.append(name, meta);
     if (f.currentNet) {
       const tag = document.createElement('span');
@@ -324,6 +343,7 @@ async function refresh() {
     if (!response.ok) throw new Error('HTTP ' + response.status);
     const data = await response.json();
     favorites = data.favorites || [];
+    rememberNodeDescriptions(data);
     cacheUpdated = data.updated || 0;
     netSchedule = data.net_schedule || {updated: 0, nets: []};
     const scheduleAge = Math.round((Date.now()/1000 - (netSchedule.updated || 0)) / 60);
@@ -532,8 +552,8 @@ setInterval(refresh, publicConfig.refreshMs);
       title.appendChild(state);
       const info = document.createElement('div');
       info.className = 'meta';
-      info.textContent = 'Node ' + entry.node + ' · ' +
-        (favoriteNodes.has(entry.node) ? 'In your favorites' : 'Not in favorites');
+      info.textContent = nodeInfoLine(entry.node,
+        favoriteNodes.has(entry.node) ? 'In your favorites' : 'Not in favorites');
       const when = document.createElement('div');
       when.className = 'net-details';
       when.textContent = localFormat.format(new Date(entry.start)) + ' – ' +
@@ -632,6 +652,7 @@ setInterval(refresh, publicConfig.refreshMs);
       const entry = data.net_schedule || {};
       if (!Array.isArray(entry.nets)) throw new Error('Net schedule is invalid');
       schedule = entry.nets;
+      rememberNodeDescriptions(data);
       favoriteNodes = new Set((data.favorites || []).map(f => String(f.node)));
       lastGoodDownload = Number(entry.updated || 0);
       problem = '';
@@ -732,7 +753,7 @@ setInterval(refresh, publicConfig.refreshMs);
       title.textContent = f.name;
       const subtitle = document.createElement('div');
       subtitle.className = 'meta';
-      subtitle.textContent = '#' + (i + 1) + ' · Node ' + f.node;
+      subtitle.textContent = '#' + (i + 1) + ' · ' + nodeInfoLine(f.node);
       details.append(title, subtitle);
       const actions = document.createElement('div');
       actions.style.display = 'flex';
@@ -753,6 +774,7 @@ setInterval(refresh, publicConfig.refreshMs);
     }
     if (!entries.length) items.textContent = 'No favorites yet. Add a node above.';
   }
+  document.addEventListener('node-descriptions-updated', () => { if (!panel.hidden) draw(); });
   async function loadFavorites() {
     try {
       const response = await apiFetch('/api/favorites', {cache: 'no-store'});

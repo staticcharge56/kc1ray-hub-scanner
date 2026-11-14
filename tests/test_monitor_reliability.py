@@ -8,6 +8,10 @@ import io
 import json
 from pathlib import Path
 import unittest
+import subprocess
+import shutil
+import re
+import tempfile
 from unittest.mock import patch
 import urllib.error
 
@@ -584,3 +588,118 @@ class PhaseBoundaryTests(OfflineCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DescriptionCachingTests(ReliabilityCase):
+    def described_payload(self,value='Directory Hub'):
+        result=self.payload()
+        result['node'].update(node_frequency=value,name=1001)
+        return result
+
+    def test_verified_directory_field_is_separate_from_favorite_and_schedule(self):
+        for payload in (None,{}, {'node':None},{'node':{'name':'Not a description','server':{'SiteName':'Machine name'}}}, {'node':{'node_frequency':None}}, {'node':{'node_frequency':42}}):
+            self.assertIsNone(stats_api.description_from_payload(payload))
+        payload={'node':{'node_frequency':'  Directory Hub\nTown  ','name':1001},'description':'NetWatch schedule'}
+        self.assertEqual(stats_api.description_from_payload(payload),'Directory Hub Town')
+        self.assertEqual(stats_api.clean_description('a'*1000),'a'*256)
+        self.assertEqual(stats_api.clean_description('A\x00B'),'AB')
+
+    def test_existing_poll_caches_description_without_changing_custom_title(self):
+        with self.respond(self.described_payload()) as request:
+            self.assertTrue(monitor.update_node('1001'))
+            self.assertEqual(request.call_count,1)
+        self.assertEqual(monitor.records['1001']['node_description'],'Directory Hub')
+        monitor.save_cache(self.favorites)
+        result=json.loads(monitor.CACHE.read_text())['favorites'][0]
+        self.assertEqual(result['name'],'First')
+        self.assertEqual(result['node_description'],'Directory Hub')
+
+    def test_network_failure_keeps_description_and_statistics_unknown(self):
+        monitor.records['1001']=self.record(node_description='Cached Hub')
+        with patch.object(monitor.urllib.request,'urlopen',side_effect=TimeoutError):
+            self.assertFalse(monitor.update_node('1001'))
+        self.assertEqual(monitor.records['1001']['node_description'],'Cached Hub')
+        self.assertEqual(monitor.records['1001']['keyups'],5)
+        self.assertEqual(self.status(monitor.records['1001']),'unknown')
+
+    def test_description_does_not_make_stale_statistics_active(self):
+        payload=self.described_payload();payload['stats']['data']['time']=1
+        with self.respond(payload):self.assertFalse(monitor.update_node('1001'))
+        self.assertEqual(monitor.records['1001']['node_description'],'Directory Hub')
+        self.assertEqual(self.status(monitor.records['1001']),'unknown')
+
+    def test_valid_empty_description_clears_and_malformed_metadata_keeps_cache(self):
+        monitor.records['1001']=self.record(node_description='Cached Hub')
+        with self.respond(self.described_payload({'invalid':'text'})):
+            self.assertTrue(monitor.update_node('1001'))
+        self.assertEqual(monitor.records['1001']['node_description'],'Cached Hub')
+        with self.respond(self.described_payload('  ')):
+            self.assertTrue(monitor.update_node('1001'))
+        self.assertNotIn('node_description',monitor.records['1001'])
+
+    def test_description_survives_restart_beyond_activity_retention(self):
+        writer=history.HistoryWriter(monitor.HISTORY,'1000',self.source,60,86400)
+        writer.save({'1001':self.record(node_description='Cached Hub')},self.favorites,{})
+        self.clock.advance(86401)
+        restored,_=self.restore()
+        self.assertEqual(restored['1001'],{'node_description':'Cached Hub'})
+        self.assertEqual(self.status(restored['1001']),'unknown')
+        self.assertNotIn('keyups',restored['1001'])
+
+    def test_metadata_checkpoints_keep_existing_write_throttle(self):
+        writer=history.HistoryWriter(monitor.HISTORY,'1000',self.source,60,86400)
+        records={'1001':self.record(node_description='First Hub')}
+        self.assertTrue(writer.save(records,self.favorites,{}))
+        records['1001']['node_description']='Renamed Hub'
+        self.clock.advance(59)
+        self.assertFalse(writer.save(records,self.favorites,{}))
+        self.assertEqual(json.loads(monitor.HISTORY.read_text())['node_descriptions'],{'1001':'First Hub'})
+        self.clock.advance(1)
+        self.assertTrue(writer.save(records,self.favorites,{}))
+        restored,_=self.restore()
+        self.assertEqual(restored['1001']['node_description'],'Renamed Hub')
+
+
+class DescriptionDisplayTests(unittest.TestCase):
+    def test_shared_formatter_and_all_view_call_sites(self):
+        import dashboard
+        source=dashboard.HTML
+        helper=re.search(r'let nodeDescriptions = Object.create\(null\);.*?(?=function render\(\))',source,re.S).group()
+        script="const assert=require('node:assert/strict'); const document={dispatchEvent(){}}; class Event{}; function fetch(){throw Error('unexpected request');}\n"+helper+r"""
+rememberNodeDescriptions({updated:1,favorites:[{node:'29332',name:'My custom favorite',node_description:'Alaska AllStar Hub'}],net_schedule:{nets:[{node:'29332',name:'NetWatch net',description:'Schedule text'}]}});
+assert.equal(nodeInfoLine('29332','active'),'Node 29332 - Alaska AllStar Hub - Active');
+assert.equal(nodeInfoLine('29332','In your favorites'),'Node 29332 - Alaska AllStar Hub - In your favorites');
+assert.equal(nodeInfoLine('29332'),'Node 29332 - Alaska AllStar Hub');
+assert.equal(nodeInfoLine('9999','unknown'),'Node 9999 - Unknown');
+rememberNodeDescriptions({updated:0,favorites:[]});
+assert.equal(nodeInfoLine('29332','idle'),'Node 29332 - Alaska AllStar Hub - Idle');
+rememberNodeDescriptions({updated:2,favorites:[{node:'29332',node_description:''}]});
+assert.equal(nodeInfoLine('29332','active'),'Node 29332 - Active');
+rememberNodeDescriptions({updated:3,favorites:[{node:'29332',node_description:'<img src=x onerror=alert(1)>'}]});
+assert.equal(nodeInfoLine('29332','active'),'Node 29332 - <img src=x onerror=alert(1)> - Active');
+console.log('OK');
+"""
+        node=shutil.which('node');self.assertIsNotNone(node,'Node.js is required for display checks')
+        result=subprocess.run([node,'-e',script],capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout,'OK\n')
+        self.assertIn('meta.textContent = nodeInfoLine(f.node, f.displayStatus)',source)
+        self.assertIn('info.textContent = nodeInfoLine(entry.node',source)
+        self.assertIn("' · ' + nodeInfoLine(f.node)",source)
+        self.assertIn('name.textContent = f.name;',source)
+        self.assertIn('title.textContent = f.name;',source)
+        self.assertNotIn('innerHTML = nodeInfoLine',source)
+
+
+    def test_cached_api_metadata_cannot_replace_authoritative_favorite_title(self):
+        import dashboard
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'activity.json'
+            path.write_text(json.dumps(dict(updated=1,favorites=[dict(node='1001',name='Cached old name',node_description='Directory Hub')])) )
+            schedule=dict(nets=[dict(node='1001',name='NetWatch net',description='Schedule description')])
+            with patch.object(dashboard,'CACHE',path),patch.object(dashboard.favorites_store,'read',return_value=[dict(node='1001',name='My custom title')]),patch.object(dashboard,'load_schedule',return_value=schedule),patch('urllib.request.urlopen',side_effect=AssertionError('No upstream reads')) as request:
+                result=dashboard.activity_payload()
+            self.assertEqual(result['favorites'][0]['name'],'My custom title')
+            self.assertEqual(result['favorites'][0]['node_description'],'Directory Hub')
+            self.assertEqual(result['net_schedule'],schedule)
+            request.assert_not_called()

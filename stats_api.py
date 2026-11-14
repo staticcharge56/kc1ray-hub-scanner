@@ -25,6 +25,21 @@ def nonnegative_int(value):
     raise InvalidStatistics('Invalid statistics integer')
 
 
+
+def clean_description(value):
+    """Bounded display-only directory text; never an activity signal or favorite name."""
+    if not isinstance(value,str):
+        return None
+    text=' '.join(''.join(char for char in value if char.isprintable() or char.isspace()).split())
+    return text[:256] or None
+
+
+def description_from_payload(payload):
+    # The public directory's Description column is node_frequency, not node.name
+    # (the numeric node ID), server name, location, or a NetWatch schedule title.
+    node=payload.get('node') if isinstance(payload,dict) else None
+    return clean_description(node.get('node_frequency')) if isinstance(node,dict) else None
+
 def parse_statistics(payload, now, max_age):
     try:
         data = payload['stats']['data']

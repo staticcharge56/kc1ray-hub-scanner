@@ -43,6 +43,23 @@ listeners, address-specific vhosts, wildcard aliases or external Apache includes
 are refused for manual integration review; current automatic support is standard
 wildcard HTTP/80 and HTTPS/443. No certificate is generated or virtual host replaced.
 
+## Subsequent node-description update
+
+Nine added display/cache tests and existing related regressions passed as **100
+focused tests in 1.053 seconds**. Python syntax and embedded JavaScript syntax in
+both standalone and /hubscanner modes passed, as did Git whitespace checks. The
+371-test full-suite result above describes the preceding Apache revision; the
+full suite was not rerun for this focused update.
+
+Descriptions are taken from node.node_frequency in existing statistics responses,
+kept separately from custom favorite names and persisted as display-only metadata
+through the existing throttled history writer. No new requests or dependencies
+were introduced. Active/All, Nets and Favorites reuse the cached string with safe
+text rendering; uncached Nets-only nodes retain their existing fallback. Activity
+freshness, polling/backoff, ranking, favorite storage, connection commands and
+Apache routing/session implementation are unchanged. No commit or deployment
+was performed. See [description caching](activity-monitoring.md#node-directory-descriptions).
+
 ## Historical staging review (0.5.0-beta)
 
 The original 0.5.0-beta local repository was initialized on branch main with no commits or

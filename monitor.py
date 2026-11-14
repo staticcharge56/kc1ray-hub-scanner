@@ -8,7 +8,7 @@ from pathlib import Path
 
 from activity_history import (HistoryWriter, WriteThrottle, activity, atomic_json,
                               fresh, load_history)
-from stats_api import (InvalidStatistics, StaleStatistics, RetryPolicy,
+from stats_api import (description_from_payload, InvalidStatistics, StaleStatistics, RetryPolicy,
                        fetch_statistics, parse_statistics, provider_wide_limit)
 
 from configuration import CONFIG, require_node
@@ -118,11 +118,19 @@ def update_node(node):
     kind, header, shared_limit = None, None, False
     try:
         payload = fetch_statistics(url, settings['request_timeout_seconds'], settings['response_max_bytes'])
+        description=description_from_payload(payload)
+        if description:
+            record['node_description']=description
         now = int(time.time())
         sample = parse_statistics(payload, now, MAX_STATS_AGE)
         old_time = record.get('stats_time', 0)
         if sample['stats_time'] < old_time:
             raise StaleStatistics('Out-of-order statistics')
+        # A valid explicit empty description removes old display metadata. Missing
+        # or malformed metadata retains the last known value through API failures.
+        metadata=payload.get('node',{})
+        if isinstance(metadata.get('node_frequency'),str) and not metadata['node_frequency'].strip():
+            record.pop('node_description',None)
         reset = (record.get('keyups') is not None and
                  (sample['keyups'] < record['keyups'] or sample['txtime'] < record['txtime']))
         baseline_fresh = fresh(record | {'error': None}, now, MAX_STATS_AGE)

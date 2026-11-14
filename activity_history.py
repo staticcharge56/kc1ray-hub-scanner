@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 import time
+from stats_api import clean_description
 
 SCHEMA_VERSION = 1
 MAX_HISTORY_BYTES = 2 * 1024 * 1024
@@ -88,6 +89,14 @@ def load_history(path, local_node, source, favorites, now, retention):
             clean = clean_record(record, now, retention)
             if clean and clean['checked'] <= saved['saved_at']:
                 result[node] = clean
+        descriptions=saved.get('node_descriptions',{})
+        if isinstance(descriptions,dict):
+            for node in wanted:
+                description=clean_description(descriptions.get(node))
+                if description:
+                    # Descriptive metadata may outlive counter freshness; it never
+                    # restores checked/stats_time or an active classification.
+                    result.setdefault(node,{})['node_description']=description
         retry = saved.get('retry')
         # Retention limits observations, not a still-pending provider retry delay.
         return result, retry if isinstance(retry, dict) and (retry.get('failures') or retry.get('nodes')) else {}
@@ -153,7 +162,12 @@ class HistoryWriter:
             record = clean_record(records.get(node), now, self.retention)
             if record is not None:
                 clean[node] = record
-        content = {'version': SCHEMA_VERSION, 'local_node': self.local_node,
+        descriptions={}
+        for favorite in favorites:
+            node=favorite['node']
+            description=clean_description(records.get(node,{}).get('node_description'))
+            if description:descriptions[node]=description
+        content = {'node_descriptions': descriptions, 'version': SCHEMA_VERSION, 'local_node': self.local_node,
                    'source': self.source, 'records': clean, 'retry': retry}
         if content == self.previous:
             return False

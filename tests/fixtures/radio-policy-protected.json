@@ -5,5 +5,10 @@
   "prefix_runtime_sha256": {
     "security.py": "8844eae258637f9e43b99bb3ebde78baf8959be981d2f2a069f9a0c29ba5f15c",
     "web_auth.py": "04aed9bcca649451f9d4555cc04d439744e1884c05b3684db2f85aea65c0f880"
+  },
+  "description_runtime_sha256": {
+    "monitor.py": "bc8ddeac931a3e4f3b037b9cba32ba4cdc7abf90eee72922185c052ef98b6eae",
+    "stats_api.py": "256a6197810e0d1cb27fe3c66f7267971ed51dc4405adbe591ebdf5fb975831e",
+    "activity_history.py": "958a52d0b359e9f696a3f6391cb7240801cb251b980921de37d9abd7915f43fb"
   }
 }

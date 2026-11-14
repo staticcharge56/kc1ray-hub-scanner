@@ -97,3 +97,10 @@ configured transport policy permits sign-in. It is also true for explicitly
 opted-in LAN HTTP; it does not certify encryption. `unencrypted_lan=true` identifies
 that exception so the login page can show the cleartext warning. Secure cookies
 remain limited to HTTPS; sessions created through HTTPS cannot be reused on HTTP.
+
+The activity response's favorite records may include `node_description`, a bounded
+cached AllStarLink directory string independent of `name` (the custom favorite
+name). Its presence does not imply fresh statistics or current RF activity.
+It is display-only metadata: do not send it in favorites mutations. The Favorites
+management API/store continues to use only node/name. See
+[node-directory caching](activity-monitoring.md#node-directory-descriptions).

@@ -217,3 +217,41 @@ future. HTTP socket timeouts apply to blocking operations, not a hard total
 wall-clock deadline against an indefinitely trickling response. Size limits bound
 accepted response bytes. Actual ASL3/ARM64, mobile, and SD-card endurance acceptance
 still require later development-environment integration tests.
+
+## Node directory descriptions
+
+The existing per-favorite statistics request also supplies the AllStarLink node
+metadata. `node.node_frequency` is the public directory's description/frequency
+text (for example, node 29332 is "Alaska AllStar Hub" in the
+[AllStarLink directory](https://allmondb.allstarlink.org/allmondb.php)). `node.name`
+is the numeric node identifier; server names, locations and NetWatch descriptions
+are not substituted for the directory description.
+
+The monitor keeps a separate `node_description` string in activity.json. Text is
+whitespace-normalized, control characters removed and limited to 256 characters.
+No favorites.json data is changed: the operator's custom name remains the card
+title and favorites order is unaffected. Active/All append the directory text
+between node number and activity status. Nets retain their net title, membership
+and schedule information while adding cached node descriptions; Favorites retain
+their custom title and priority index. Text is inserted using textContent, never
+interpreted as HTML. Missing descriptions create no blank separator or placeholder.
+
+There are no additional upstream calls, browser directory lookups or changes to
+polling/backoff. Description data is harvested even when the same response's
+activity statistics are unusable, but it never supplies a counter, timestamp or
+active classification. HTTP/network failures or malformed/missing description
+fields retain the last known description; a valid, explicit empty description
+clears it. Activity still becomes unknown whenever statistics are failed/stale.
+
+The existing atomic, throttled history checkpoint includes an optional
+node_descriptions map for current favorites. This is an additive schema-1 field;
+older state files still load, and older readers can ignore it. Descriptions may
+survive beyond activity-retention limits as metadata-only records; rejected old
+counters and RF activity are not revived. Existing cache/checkpoint write intervals
+are unchanged, so an abrupt failure can lose changes not yet checkpointed.
+
+Nets nodes not monitored as favorites have no description unless one is already
+available in the activity data. Their original membership/node information remains
+visible without an invented directory description or inferred RF activity. Adding
+one to Favorites lets normal polling populate metadata; no NetWatch schedule text
+is used as a substitute and no NetLogger/AllScan dependency is introduced.

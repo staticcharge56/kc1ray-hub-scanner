@@ -13,8 +13,9 @@ hardware are not covered by the reported acceptance. See the
 
 Version 0.5.1-beta includes preferred Apache `/hubscanner/` integration,
 subnet-restricted firewalld management for standalone LAN mode, and an 8-character
-administrator password minimum. **371 tests passed**, including an isolated real
-Apache proxy test, with Python/JavaScript/shell/systemd checks. Live ASL3 Apache,
+administrator password minimum. The Apache baseline passed **371 tests**, including
+an isolated real proxy test. The subsequent node-description update passed **100
+focused tests** plus Python/JavaScript syntax checks; its full suite was not rerun. Live ASL3 Apache,
 HTTPS and firewalld acceptance of this increment remains required. See the
 [network access and recovery guide](docs/network-access.md).
 
@@ -79,6 +80,12 @@ use a configured trusted HTTPS reverse proxy when encryption is needed.
 [Tailscale and 44Net Connect](docs/network-access.md) are optional remote networking
 choices; neither is required to run the scanner. 44Net Connect provides WireGuard
 connectivity and routable addresses, not HTTPS termination.
+
+Node cards keep your custom favorite title and add the cached AllStarLink directory
+description to the node-information line, for example:
+`Node 29332 - Alaska AllStar Hub - Active`. Active/All, Nets and Favorites reuse
+existing cached metadata; missing descriptions leave no empty field. NetWatch net
+names and schedules remain separate. See [description caching](docs/activity-monitoring.md#node-directory-descriptions).
 
 FIRST, NEXT and Connect use application-owned disconnect-before-connect and verified
 Asterisk link states. No rpt.conf, DTMF, connection hook or single-link.sh changes

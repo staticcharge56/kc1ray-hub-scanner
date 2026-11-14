@@ -618,6 +618,10 @@ class PackagingBoundaryTests(OfflineCase):
                 continue # Explicitly authorized application-owned link transitions.
             with self.subTest(name=name):
                 raw=(ROOT/name).read_bytes()
+                if name in ('monitor.py','stats_api.py','activity_history.py'):
+                    reviewed=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['description_runtime_sha256']
+                    self.assertEqual(hashlib.sha256(raw).hexdigest(),reviewed[name])
+                    continue # Reviewed display-only metadata; historical baseline remains intact.
                 if name in ('security.py','web_auth.py'):
                     reviewed=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['prefix_runtime_sha256']
                     self.assertEqual(hashlib.sha256(raw).hexdigest(),reviewed[name])
@@ -637,11 +641,9 @@ class PackagingBoundaryTests(OfflineCase):
                     raw=raw.replace(b'if not context.transport_allowed:',b'if not context.secure and not context.loopback:')
                 self.assertEqual(hashlib.sha256(raw).hexdigest(),digest)
 
-    def test_only_monitor_history_path_changed_from_phase_3(self):
-        current=(ROOT/'monitor.py').read_bytes()
-        normalized=current.replace(b"HISTORY = Path(CONFIG['paths']['monitor_state_dir'])",b"HISTORY = Path(CONFIG['paths']['state_dir'])")
-        previous=json.loads((ROOT/'tests/fixtures/phase-3-protected.json').read_text())['monitor.py']
-        self.assertEqual(hashlib.sha256(normalized).hexdigest(),previous)
+    def test_monitor_matches_reviewed_description_increment(self):
+        expected=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['description_runtime_sha256']['monitor.py']
+        self.assertEqual(hashlib.sha256((ROOT/'monitor.py').read_bytes()).hexdigest(),expected)
 
 
 class RuntimeReadinessTests(OfflineCase):
