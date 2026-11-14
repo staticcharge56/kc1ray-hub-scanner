@@ -399,7 +399,7 @@ class UnchangedInterfaceTests(OfflineCase):
                     nodes.append(node)
             return hashlib.sha256(''.join(ast.dump(n,include_attributes=False) for n in nodes).encode()).hexdigest()
         expected=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())
-        self.assertEqual(protected((ROOT/'dashboard.py').read_text()),expected['dashboard_prefix_http_sha256'])
+        self.assertEqual(protected((ROOT/'dashboard.py').read_text()),expected['dashboard_admin_http_sha256'])
 
 class BrokerTransitionIntegrationTests(OfflineCase):
     """Actual broker driver + scanner + parser/argv, with only Asterisk replaced."""

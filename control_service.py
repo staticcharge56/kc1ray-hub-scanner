@@ -3,6 +3,7 @@ import threading
 import time
 import re
 from security import Denied
+from admin_settings import policy_protected
 from radio_control import command_guard, Busy, RadioError, RadioTimeout, load_selection, normalize_links
 
 ACTIONS={'first','next','stop','connect-node','disconnect-node','connect-net','disconnect-net'}
@@ -66,6 +67,7 @@ class ControlService:
         finally:
             self.link_lock.release()
 
+    @policy_protected
     def control(self,payload):
         driver=self.driver
         if not driver.CONFIG['web']['controls_enabled']:

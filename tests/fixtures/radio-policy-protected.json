@@ -10,5 +10,12 @@
     "monitor.py": "bc8ddeac931a3e4f3b037b9cba32ba4cdc7abf90eee72922185c052ef98b6eae",
     "stats_api.py": "256a6197810e0d1cb27fe3c66f7267971ed51dc4405adbe591ebdf5fb975831e",
     "activity_history.py": "958a52d0b359e9f696a3f6391cb7240801cb251b980921de37d9abd7915f43fb"
-  }
+  },
+  "admin_runtime_sha256": {
+    "security.py": "6a882df76db3442266af9a6ee757dff92568b1fc399d6b1c91e3ceed8b5cd40d",
+    "web_auth.py": "77ba8b3898007d9bd4efca998b097abccce0ff7845d75d3be458c6743b730f11",
+    "broker.py": "962408d9c2a9e690359df04bf30e5ca62048a55dc2f20e8c0349d3fda658f104",
+    "control_service.py": "ded6300c96b52de533c7e253ca231ba9279345233c19207d2c7dc63d50283f65"
+  },
+  "dashboard_admin_http_sha256": "3b7c82afc43f0570cc82994c97bc2f811a77a5335c55afbfd32486cba0591aa1"
 }

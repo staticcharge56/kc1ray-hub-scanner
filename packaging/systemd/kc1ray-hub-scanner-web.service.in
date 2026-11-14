@@ -5,6 +5,8 @@ PartOf=kc1ray-hub-scanner-broker.service
 Wants=kc1ray-hub-scanner-monitor.service
 After=kc1ray-hub-scanner-broker.service kc1ray-hub-scanner-monitor.service
 
+After=kc1ray-hub-scanner-admin.service
+
 [Service]
 Type=exec
 User=kc1ray-web

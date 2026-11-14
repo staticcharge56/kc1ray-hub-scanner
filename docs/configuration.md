@@ -185,3 +185,29 @@ its exact origin, also present in allowed_origins, enabling the private-client
 HTTP exception behind the explicitly trusted loopback proxy. Do not use this to
 trust arbitrary forwarding headers. HTTPS origins use the existing trusted-proxy
 transport and Secure cookies. All other auth and broker configuration is retained.
+
+## Phase 1 web administration (0.6.0-beta)
+
+Authenticated administrators can change only `web.refresh_seconds` (5, 10, 15,
+30 or 60; an existing nonstandard value may be retained), `web.controls_enabled`,
+`web.anonymous_view`, `schedules.netwatch.enabled` and
+`schedules.allstarnets.enabled` in **Admin**. All other fields remain intact.
+No new configuration keys are required. The ordinary upgrade still preserves
+configuration bytes and administrator credentials. Saving through Admin uses
+atomic replacement preserving ownership/mode and all unedited values; TOML
+comments and formatting are rewritten. Keep an operator copy if comments matter.
+
+Changes are serialized with radio operations and package lifecycle operations;
+a busy operation returns a retry message rather than interrupting a command.
+Conflicting edits require Reload before Save. Controls/anonymous-view changes
+reach the server immediately and other dashboards on their next refresh. Refresh
+changes do not change upstream polling. Disabling controls retains the existing
+maintenance policy that blocks favorites mutations as well as radio commands;
+Admin itself remains usable. No existing link is disconnected by this switch.
+
+Source switches reconcile only the two existing timers and retain cached nets.
+A failed operation restores the prior configuration and timer state; an unresolved
+rollback is recorded for recovery and prevents further updates. Other configuration
+settings, including node, proxies, Apache and firewall, remain outside Admin.
+Manual configuration edits still require the usual validation/restarts for fields
+outside these five supported live settings.

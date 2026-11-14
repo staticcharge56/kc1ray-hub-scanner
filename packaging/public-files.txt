@@ -7,6 +7,9 @@ acceptance/installed.py
 acceptance/mock_asterisk.py
 acceptance/prepare.py
 activity_history.py
+admin_service.py
+admin_settings.py
+admin_ui.py
 broker.py
 config/config.example.toml
 config/favorites.example.json
@@ -43,6 +46,7 @@ migrate_favorites.py
 monitor.py
 packaging/public-files.txt
 packaging/release.json
+packaging/systemd/kc1ray-hub-scanner-admin.service.in
 packaging/systemd/kc1ray-hub-scanner-allstarnets.service.in
 packaging/systemd/kc1ray-hub-scanner-allstarnets.timer.in
 packaging/systemd/kc1ray-hub-scanner-broker.service.in
@@ -62,6 +66,7 @@ tests/fixtures/phase-4-protected.json
 tests/fixtures/radio-policy-protected.json
 tests/fixtures/runtime-baseline.json
 tests/test_acceptance.py
+tests/test_admin.py
 tests/test_asterisk_socket.py
 tests/test_baseline.py
 tests/test_configuration_favorites.py

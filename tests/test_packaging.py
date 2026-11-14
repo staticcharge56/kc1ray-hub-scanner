@@ -396,7 +396,7 @@ class InstallTests(PackagingCase):
                 self.assertIn('ProtectSystem=strict',unit)
                 self.assertIn('UMask=0027',unit)
         starts=[args[-1] for args in self.host.commands if args[:2]==['systemctl','start']]
-        self.assertEqual(starts[:3],list(pkg.MAIN_UNITS))
+        self.assertEqual(starts[:len(pkg.MAIN_UNITS)],list(pkg.MAIN_UNITS))
 
 
 class UpgradeTests(PackagingCase):
@@ -614,6 +614,10 @@ class PackagingBoundaryTests(OfflineCase):
     def test_runtime_compatibility_changes_keep_other_modules_identical(self):
         expected=json.loads((ROOT/'tests/fixtures/phase-4-protected.json').read_text())
         for name,digest in expected.items():
+            admin=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['admin_runtime_sha256']
+            if name in admin:
+                self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),admin[name])
+                continue # Explicit administration IPC/live-policy boundary; old hashes retained.
             if name in ('dashboard.py','scanner.py','control_service.py'):
                 continue # Explicitly authorized application-owned link transitions.
             with self.subTest(name=name):

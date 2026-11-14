@@ -11,6 +11,8 @@ import secrets
 import threading
 import socket
 from broker import rpc, validate_web_identity
+from admin_settings import rpc as admin_rpc,refresh as refresh_admin
+from admin_ui import ADMIN_UI
 from security import (Security, Credentials, Denied, request_context, cookie_token, session_cookie)
 from web_auth import LOGIN_HTML, APP_AUTH
 from urllib.parse import urlsplit
@@ -47,6 +49,7 @@ HTML = r'''<!DOCTYPE html>
 <style>
 :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101720; color: #f1f5f9; }
 body { margin: 0; padding: 16px; }
+[hidden] { display: none !important; }
 main { max-width: 650px; margin: auto; }
 h1 { font-size: 1.5rem; margin: 0 0 4px; }
 h2 { font-size: 1.05rem; margin: 0 0 12px; }
@@ -62,7 +65,7 @@ button { border: 0; border-radius: 8px; padding: 12px; background: #334155; colo
 button:disabled { opacity: .55; cursor: not-allowed; }
 button.selected { background: #2563eb; }
 #control-status { color: #cbd5e1; font-size: .9rem; white-space: pre-line; overflow-wrap: anywhere; margin-bottom: 0; }
-.controls { display: flex; gap: 8px; margin: 14px 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
 .node { background: #1e293b; border-radius: 10px; margin-bottom: 8px; padding: 14px; display: flex; align-items: center; gap: 12px; }
 .dot { height: 13px; width: 13px; border-radius: 50%; flex-shrink: 0; }
 .active { background: #22c55e; }
@@ -135,6 +138,7 @@ __APP_AUTH__
 let filter = 'active';
 let favorites = [];
 let cacheUpdated = 0;
+let refreshTimer = null;
 let netSchedule = {updated: 0, nets: [], default_duration_minutes: publicConfig.netDuration};
 let commandBusy = false;
 let directLinks = [];
@@ -233,6 +237,19 @@ function netForNode(node, nowSeconds) {
     }
   }
   return {current, upcoming};
+}
+
+function applyViewSettings(settings) {
+  if (!settings || !Number.isInteger(settings.refresh_seconds) || settings.refresh_seconds<=0) return;
+  const milliseconds=settings.refresh_seconds*1000;
+  if (milliseconds!==publicConfig.refreshMs) {
+    publicConfig.refreshMs=milliseconds;
+    if (refreshTimer!==null) clearInterval(refreshTimer);
+    refreshTimer=setInterval(refresh,milliseconds);
+  }
+  if (typeof settings.controls_enabled==='boolean') publicConfig.controlsEnabled=settings.controls_enabled;
+  if (typeof settings.anonymous_view==='boolean') publicConfig.anonymousView=settings.anonymous_view;
+  updateAccess();
 }
 
 let nodeDescriptions = Object.create(null);
@@ -342,6 +359,7 @@ async function refresh() {
     const response = await apiFetch('/api/activity', {cache: 'no-store'});
     if (!response.ok) throw new Error('HTTP ' + response.status);
     const data = await response.json();
+    applyViewSettings(data.view_settings);
     favorites = data.favorites || [];
     rememberNodeDescriptions(data);
     cacheUpdated = data.updated || 0;
@@ -414,7 +432,7 @@ async function sendCommand(action, node = null) {
 }
 
 refresh();
-setInterval(refresh, publicConfig.refreshMs);
+refreshTimer=setInterval(refresh, publicConfig.refreshMs);
 
 
 
@@ -846,7 +864,7 @@ def render_html(nonce=None):
     nonce = nonce or secrets.token_urlsafe(24)
     return HTML.replace('__LOCAL_NODE__', LOCAL_NODE).replace(
         '__PUBLIC_CONFIG__', json.dumps(public).replace('<', r'\u003c')).replace(
-        '__APP_AUTH__', APP_AUTH).replace('__URL_PREFIX__',json.dumps(CONFIG['web']['url_prefix'])).replace('href="/login"','href="'+CONFIG['web']['url_prefix']+'/login"').replace('<script>', '<script nonce="'+nonce+'">')
+        '__APP_AUTH__', APP_AUTH).replace('</body>','<script>'+ADMIN_UI+'</script></body>').replace('__URL_PREFIX__',json.dumps(CONFIG['web']['url_prefix'])).replace('href="/login"','href="'+CONFIG['web']['url_prefix']+'/login"').replace('<script>', '<script nonce="'+nonce+'">')
 
 
 def favorite_numbers():
@@ -890,6 +908,7 @@ def activity_payload():
     payload['favorites'] = [samples.get(f['node'], {}) | f for f in favorites_store.read()]
     payload['local_node'] = LOCAL_NODE
     payload['net_schedule'] = load_schedule()
+    payload['view_settings'] = {key:CONFIG['web'][key] for key in ('refresh_seconds','controls_enabled','anonymous_view')}
     return payload
 
 
@@ -959,20 +978,21 @@ class Handler(BaseHTTPRequestHandler):
             if len(self.headers.get_all(name,[]))>1:
                 raise Denied(400,'Duplicate security header')
         self.auth=self.server.security
+        refresh_admin(CONFIG,self.auth)
         self.auth.rates.take(('read',self.context.client),CONFIG['auth']['read_attempts'],CONFIG['auth']['read_window_seconds'])
         self.token=cookie_token(self.headers,name=self.prefix_cookie_name()) if prefix else cookie_token(self.headers)
         self.session=self.auth.sessions.lookup(self.token,self.context.secure)
         if self.session and self.session.username and not self.context.transport_allowed:
             raise Denied(403,'HTTPS required for administrator access')
 
-    def read_json(self):
+    def read_json(self,maximum=4096):
         if self.headers.get('Transfer-Encoding') is not None or len(self.headers.get_all('Content-Length',[]))!=1:
             raise Denied(400,'Invalid request framing')
         if len(self.headers.get_all('Content-Type',[]))!=1 or self.headers.get('Content-Type','').split(';')[0].strip().lower()!='application/json':
             raise Denied(415,'JSON required')
         try:
             length=int(self.headers['Content-Length'])
-            if not 0<length<=4096:
+            if not 0<length<=maximum:
                 raise ValueError()
             raw=self.rfile.read(length)
             if len(raw)!=length:
@@ -1035,6 +1055,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.auth.authorize(self.session,None,anonymous=CONFIG['web']['anonymous_view'])
                     html=render_html(self.csp_nonce)
                 self.send_body(200,'text/html; charset=utf-8',html.encode())
+            elif self.path=='/api/admin':
+                self.auth.authorize(self.session,None)
+                self.json_body(200,admin_rpc('status'))
             elif self.path=='/api/session':
                 self.session_response()
             elif self.path in ('/api/activity','/api/links','/api/favorites'):
@@ -1068,6 +1091,16 @@ class Handler(BaseHTTPRequestHandler):
                 token,session=self.auth.login(self.context,self.token,self.session,self.headers.get('X-CSRF-Token'),payload)
                 self.response_headers.append(('Set-Cookie',self.session_header(token)))
                 self.json_body(200,{'authenticated':True,'csrf':session.csrf})
+                return
+            if self.path in ('/api/admin/settings','/api/admin/password'):
+                self.authorize_mutation()
+                payload=self.read_json(maximum=32768 if self.path.endswith('/password') else 4096)
+                result=admin_rpc('password' if self.path.endswith('/password') else 'settings',payload)
+                refresh_admin(CONFIG,self.auth)
+                if self.path.endswith('/password'):
+                    self.auth.sessions.revoke_all()
+                    self.response_headers.append(('Set-Cookie',self.session_header('',delete=True)))
+                self.json_body(200,result)
                 return
             if self.path not in ('/api/control','/api/favorites','/api/auth/logout','/api/session/touch'):
                 self.reply(404,'Not found')

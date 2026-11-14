@@ -46,6 +46,9 @@ const authReady=fetch(hubUrl('/api/session'),{cache:'no-store'}).then(async resp
 }).catch(()=>{updateAccess();});
 function canMutate(){return authState.authenticated&&publicConfig.controlsEnabled;}
 function updateAccess(){
+  const admin=document.getElementById('adminBtn');if(admin)admin.hidden=!authState.authenticated;
+  const adminPanel=document.getElementById('admin-panel');if(adminPanel&&!authState.authenticated)adminPanel.hidden=true;
+  document.dispatchEvent(new Event('auth-state-changed'));
   const info=document.getElementById('account-status');
   if(info)info.textContent=authState.authenticated?'Administrator':'Read-only viewer';
   const logout=document.getElementById('logout');if(logout)logout.hidden=!authState.authenticated;

@@ -104,3 +104,32 @@ name). Its presence does not imply fresh statistics or current RF activity.
 It is display-only metadata: do not send it in favorites mutations. The Favorites
 management API/store continues to use only node/name. See
 [node-directory caching](activity-monitoring.md#node-directory-descriptions).
+
+## Phase 1 administration
+
+All three routes require an authenticated administrator even with anonymous viewing.
+Use the existing cookie, origin and CSRF sequence; prepend `/hubscanner` in Apache
+mode. GET `/api/admin` returns only the five supported `settings`, an opaque
+configuration `revision`, `recovery_required`, cached `source_updates` timestamps
+and read-only `status` (version, local node, web method, three primary application
+service states, two timer states and last successful monitor sample time).
+Unavailable timestamps are null. No external statistics/schedule request is made.
+
+POST `/api/admin/settings` takes `revision` from GET and a `settings` object
+containing any subset of `refresh_seconds`, `controls_enabled`, `anonymous_view`,
+`netwatch_enabled`, `allstarnets_enabled`. Types are strictly validated. Turning
+controls off requires `confirm_disable: true`; it does not disconnect links.
+A stale revision returns 409; a concurrent radio, login, settings or installer
+operation returns 429 with Retry-After. Service/configuration failures return 503
+with rollback/recovery information. Reload before retrying a conflicting edit.
+Successful responses include the refreshed safe status/settings projection.
+
+POST `/api/admin/password` takes only `current_password`, `new_password` and
+`confirmation`, never query parameters. Matching new passwords must have at least
+8 characters; the current password is verified using existing scrypt credentials.
+Success returns a message and `reauthenticate: true`, revokes every session and
+expires the caller's prefix-scoped cookie. No password/hash/secret is returned.
+Both POST routes use existing sensitive-operation limits. The helper separately
+limits current-password attempts using the configured login attempt/window limits;
+status is limited to 30 helper requests/minute. This API cannot change node,
+cooldown, software, Apache, firewall, arbitrary services or filesystem paths.

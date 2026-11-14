@@ -1,8 +1,38 @@
-# Next beta review — 0.5.1-beta
+# Current beta review — 0.6.0-beta
+
+This increment implements Phase 1 Admin only. The public allowlist now contains
+85 files, adding three runtime modules, the restricted Admin unit and its tests.
+No staging, commit, release archive, deployment or Pi access was performed.
+The earlier reports below are historical, not evidence for the new root helper.
+
+The new helper limits mutations to five existing settings, credentials and two
+schedule timers. The web account gains no configuration write permission or
+systemd access. New offline tests cover authorization, CSRF, password/session
+invalidation, atomic updates, failed timer rollback, concurrency, upgrade from
+old manifests and prefix-aware cookies. Configuration schemas remain version 1.
+No dependency, Asterisk configuration or radio command flow was added or changed.
+
+Release acceptance still requires the installed root-helper sandbox, UID/socket
+permissions, real systemd timer transitions, crash recovery, upgrade/rollback and
+mobile Admin behavior on the spare Debian 12 ARM64 system. Plain trusted-LAN HTTP
+still transmits credentials/cookies without encryption. Saving Admin settings
+preserves unedited values but normalizes TOML formatting/comments. Existing
+provenance and upstream/hardware compatibility limitations remain in force.
+
+## Current validation
+
+`python3 -B tools/check.py` passed **409 tests in 140.893 seconds**, including
+29 focused Admin tests. Python and embedded JavaScript syntax, example defaults,
+shell syntax, all systemd unit templates and recovery CLI bootstrap passed.
+`git diff --check` passed. The allowlist contains 85 unique, present regular files.
+These are offline/modelled results, including isolated HTTP/Apache fixtures; no
+installed root-helper or hardware acceptance is claimed.
+
+## Historical 0.5.1-beta review
 
 ## Status and evidence
 
-The first public-release candidate is **0.5.1-beta**, as recorded in
+The first public-release candidate is **0.5.1-beta**, as recorded in that revision of
 packaging/release.json. All four data/configuration schemas and the package schema
 remain version 1. The owner has approved MIT and the attribution
 "Copyright (c) 2026 KC1RAY Hub Scanner contributors". Root LICENSE and the complete

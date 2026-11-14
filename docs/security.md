@@ -278,3 +278,32 @@ Apache path prefixes separate routing and cookie scope, not browser origins.
 Other applications on the selected origin (including AllScan) share its browser
 trust boundary. Keep those applications trusted and maintained; use a separately
 selected hostname/vhost when stronger origin separation is required.
+
+## Restricted administration helper (0.6.0-beta)
+
+The new `kc1ray-hub-scanner-admin.service` is a root helper, separate from the
+radio broker. It has no Asterisk groups or commands, cannot access `/etc/asterisk`
+or `/run/asterisk`, permits AF_UNIX only and has an empty capability bounding set.
+Existing web, monitor and radio account permissions remain unchanged. Its
+root:kc1ray-control socket is mode 0660 in a root-owned 0750 runtime directory.
+SO_PEERCRED accepts only the configured web UID, including rejection of the radio
+UID. The web client also requires a root peer. Requests have bounded framing,
+fixed operations and fixed systemd unit allowlists; no HTTP paths, shell commands
+or unit names are accepted. Only the two schedule timers can be changed.
+
+Every Admin endpoint requires the existing administrator session, including when
+anonymous viewing is enabled; mutations retain origin, CSRF and sensitive-operation
+limits. The root helper additionally limits password verification. Current-password
+verification and scrypt creation use the existing authentication code and shared
+hash lock. Password changes atomically preserve credential ownership/mode and
+revoke all existing sessions, including the changing session. Reauthentication is
+required. Passwords are sent only in POST bodies, never returned, stored in a
+journal or logged. HTTPS remains necessary for encrypted transport.
+
+Root-only recovery state contains previous configuration or password **hashes**,
+not plaintext passwords. Successful operations remove their recovery record.
+A failed/incomplete operation publishes a fail-closed policy until recovery.
+Normal uninstall retains this private state; explicit confirmed purge removes it.
+Installed UID/group enforcement, root-helper sandbox and systemd authorization
+must still be acceptance-tested on Debian 12 ASL3; local modeled tests cannot
+establish those hardware/system-manager properties.

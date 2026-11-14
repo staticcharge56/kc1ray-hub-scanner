@@ -54,11 +54,11 @@ LAUNCHER=Path('/usr/local/sbin/kc1ray-hub-scanner')
 TMPFILES=Path('/etc/tmpfiles.d/kc1ray-hub-scanner.conf')
 PREFIX='kc1ray-hub-scanner-'
 UNITS=tuple(PREFIX+x for x in ('broker.service','monitor.service','web.service','netwatch.service',
-                             'allstarnets.service','netwatch.timer','allstarnets.timer'))
-STOP_ORDER=tuple(PREFIX+x for x in ('netwatch.timer','allstarnets.timer','web.service',
+                             'allstarnets.service','netwatch.timer','allstarnets.timer','admin.service'))
+STOP_ORDER=tuple(PREFIX+x for x in ('netwatch.timer','allstarnets.timer','admin.service','web.service',
                                   'monitor.service','netwatch.service','allstarnets.service','broker.service'))
-MAIN_UNITS=tuple(PREFIX+x+'.service' for x in ('broker','monitor','web'))
-APP_FILES=('radio_control.py','activity_history.py','broker.py','configuration.py','control_service.py','dashboard.py',
+MAIN_UNITS=tuple(PREFIX+x+'.service' for x in ('admin','broker','monitor','web'))
+APP_FILES=('admin_service.py','admin_settings.py','admin_ui.py','radio_control.py','activity_history.py','broker.py','configuration.py','control_service.py','dashboard.py',
            'favorites_store.py','manage_admin.py','migrate_favorites.py','monitor.py','scanner.py',
            'security.py','stats_api.py','update-nets.py','update_netwatch.py','web_auth.py')
 GROUPS=('kc1ray-read','kc1ray-control','kc1ray-web')
@@ -814,6 +814,8 @@ class Manager:
     def plan(self,action,node=None,port=None,binary='/usr/sbin/asterisk',bind=None,config_template=None,web_access=None,apache_vhosts=None,apache_origins=None):
         if web_access not in (None,'apache','standalone'):
             raise InstallError('Select apache or standalone web access')
+        if self.host.path('/var/lib/kc1ray-hub-scanner-admin/transaction.json').exists():
+            raise InstallError('An interrupted administration change needs helper recovery before lifecycle operations')
         manifest=self.manifest()
         if action in ('install','upgrade'):
             if manifest:
@@ -854,7 +856,7 @@ class Manager:
                 Credentials(self.host.path(CONF/'credentials.json'))
                 validate_favorites(json.loads(self.host.path(STATE/'favorites.json').read_bytes()))
             else:
-                for logical in (APP,CONF,STATE,MONITOR_STATE,CACHE,RUNTIME,LAUNCHER,TMPFILES,*[UNIT_DIR/name for name in UNITS]):
+                for logical in (Path('/var/lib/kc1ray-hub-scanner-admin'),APP,CONF,STATE,MONITOR_STATE,CACHE,RUNTIME,LAUNCHER,TMPFILES,*[UNIT_DIR/name for name in UNITS]):
                     if self.host.path(logical).exists() or self.host.path(logical).is_symlink():
                         raise InstallError('Unmanaged destination exists; explicit migration/review required: '+str(logical))
             if node is not None and (not re.fullmatch(r'[0-9]{3,7}',node) or (node not in env['nodes'] and not env['dynamic_nodes'])):
@@ -1112,8 +1114,11 @@ class Manager:
             raise InstallError('Invalid backup identifier')
         base=REGISTRY/'backups'/identifier
         metadata=read_json(self.host,base/'snapshot.json')
-        if not metadata or metadata.get('complete') is not True or set(metadata.get('areas',{}))!=set(AREAS):
+        old_areas=set(AREAS)-{'unit-'+PREFIX+'admin.service'}
+        if not metadata or metadata.get('complete') is not True or set(metadata.get('areas',{})) not in (set(AREAS),old_areas):
             raise InstallError('Backup is incomplete or unsupported')
+        metadata['areas'].setdefault('unit-'+PREFIX+'admin.service',{})
+        metadata['services'].setdefault(PREFIX+'admin.service',dict(enabled=False,active=False,enable_state='not-found'))
         apache_text(metadata.get('apache',[]))
         firewall=metadata.get('firewall',[])
         if not isinstance(firewall,list):
@@ -1233,7 +1238,10 @@ class Manager:
                 self.firewall_set(plan['firewall']['desired'])
                 self.switch(identity)
                 if action=='upgrade':
-                    self.restore_services(states)
+                    desired_states=deepcopy(states)
+                    if PREFIX+'admin.service' not in current.get('units',{}):
+                        desired_states[PREFIX+'admin.service']=dict(enabled=True,active=True,enable_state='enabled')
+                    self.restore_services(desired_states)
                     for name,state in states.items():
                         if state['active'] and not self.host.service_state(name)['active']:
                             raise InstallError('Previously active application unit failed after upgrade')
@@ -1272,6 +1280,8 @@ class Manager:
         mkdir(self.host,REGISTRY,0o700)
         with self.host.path(REGISTRY/'operation.lock').open('a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            if self.host.path('/var/lib/kc1ray-hub-scanner-admin/transaction.json').exists():
+                raise InstallError('Administration recovery must finish before rollback')
             states=self.states()
             original_journal=read_json(self.host,REGISTRY/'transaction.json')
             safety=None
@@ -1305,6 +1315,7 @@ class Manager:
             for name in UNITS:
                 self.remove(UNIT_DIR/(name+'.d'))
             self.remove(REGISTRY/'backups')
+            self.remove(Path('/var/lib/kc1ray-hub-scanner-admin'))
             self.remove(REGISTRY/'manifest.json')
             self.clear_transaction()
         except Exception as failure:

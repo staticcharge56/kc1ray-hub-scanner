@@ -4,6 +4,8 @@ Requires=asterisk.service
 PartOf=asterisk.service
 After=asterisk.service
 
+After=kc1ray-hub-scanner-admin.service
+
 [Service]
 Type=exec
 User=kc1ray-radio

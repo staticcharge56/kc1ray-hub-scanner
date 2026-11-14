@@ -46,6 +46,18 @@ def wait_socket():
     raise ValueError('Control socket did not become ready')
 
 
+
+def wait_admin():
+    from admin_settings import SOCKET
+    deadline=time.monotonic()+10
+    while time.monotonic()<deadline:
+        try:
+            info=SOCKET.stat()
+            if stat.S_ISSOCK(info.st_mode) and info.st_uid==0 and info.st_gid==CONFIG['broker']['socket_gid'] and stat.S_IMODE(info.st_mode)==0o660:return
+        except FileNotFoundError:pass
+        time.sleep(.1)
+    raise ValueError('Administration socket did not become ready')
+
 def wait_web():
     host=CONFIG['web']['bind']
     host='127.0.0.1' if host=='0.0.0.0' else host
@@ -69,10 +81,10 @@ def wait_web():
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('check',choices=('validate','socket','web'))
+    parser.add_argument('check',choices=('validate','socket','web','admin'))
     args=parser.parse_args()
     try:
-        {'validate':validate,'socket':wait_socket,'web':wait_web}[args.check]()
+        {'validate':validate,'socket':wait_socket,'web':wait_web,'admin':wait_admin}[args.check]()
     except (OSError,ValueError,KeyError,TypeError):
         parser.exit(1,'Runtime validation failed; inspect configuration, permissions and service logs.\n')
 

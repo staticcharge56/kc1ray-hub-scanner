@@ -1,23 +1,19 @@
-# KC1RAY Hub Scanner — 0.5.1-beta
+# KC1RAY Hub Scanner — 0.6.0-beta
 
 An activity dashboard and favorites scanner for personal AllStarLink nodes on
 ASL3 / Debian 12. Includes live favorites, activity history, scheduled nets and
 authenticated FIRST, NEXT, STOP and direct connection controls.
 
 Hardware acceptance of 0.4.4 passed on a spare Debian 12 ARM64 Raspberry Pi
-running ASL3 Asterisk 22.10.1. Version **0.5.1-beta** is the first public-release
-candidate; the later LAN-first changes passed 336 local tests and still have an
-unreported installed-hardware acceptance gap. Other ASL3 versions and 32-bit
-hardware are not covered by the reported acceptance. See the
-[release review](docs/public-release-review.md) for remaining provenance concerns.
+running ASL3 Asterisk 22.10.1. Later beta increments require installed-hardware
+acceptance; other ASL3 versions and 32-bit hardware remain unverified.
+See the [release review](docs/public-release-review.md).
 
-Version 0.5.1-beta includes preferred Apache `/hubscanner/` integration,
-subnet-restricted firewalld management for standalone LAN mode, and an 8-character
-administrator password minimum. The Apache baseline passed **371 tests**, including
-an isolated real proxy test. The subsequent node-description update passed **100
-focused tests** plus Python/JavaScript syntax checks; its full suite was not rerun. Live ASL3 Apache,
-HTTPS and firewalld acceptance of this increment remains required. See the
-[network access and recovery guide](docs/network-access.md).
+Version **0.6.0-beta** adds an administrator-only **Admin** tab for dashboard
+refresh, control availability, anonymous viewing, schedule-source timers,
+password changes and read-only service status. It retains Apache `/hubscanner/`,
+standalone LAN access, restricted firewalld management and node descriptions.
+See [Admin operation](#admin-operation) and the [network guide](docs/network-access.md).
 
 ## Install for your personal node
 
@@ -152,3 +148,25 @@ than installing/upgrading ASL3 or running package downloads automatically. The r
 MIT, copyright (c) 2026 KC1RAY Hub Scanner contributors. The owner has approved
 the [license and attribution](LICENSE). Original-code provenance is not
 independently verified; see [the provenance review](docs/license-and-attribution.md).
+
+## Admin operation
+
+Sign in as the administrator, then choose **Admin**. Save applies the five
+supported settings without restarting Asterisk or disconnecting current links;
+Cancel restores the displayed values. Reload settings/status reads local state
+without polling external services. Refresh changes affect dashboard refresh only,
+not AllStarLink polling. Disabling controls requires confirmation and preserves
+the existing maintenance behavior: favorites writes are also disabled.
+
+Anonymous viewing exposes node/activity/schedule information to anyone who can
+reach the dashboard; it grants no administration or mutation rights. Source
+switches enable/start or stop/disable only the existing NetWatch and AllStar Nets
+timers. Cached data is retained; the timer decides when the next import runs.
+
+Password changes require the current password, two matching new entries of at
+least eight characters, and reauthentication afterward. All previous sessions
+are revoked. Use HTTPS to encrypt passwords and cookies; trusted-LAN HTTP is
+unencrypted. Settings Save preserves other configuration values and file
+ownership/permissions, but rewrites TOML formatting and comments. See
+[configuration](docs/configuration.md), [security](docs/security.md) and
+[recovery](docs/installation.md#admin-helper-recovery).

@@ -561,6 +561,10 @@ class PhaseBoundaryTests(OfflineCase):
     def test_protected_runtime_files_are_byte_for_byte_unchanged(self):
         expected = json.loads((ROOT/'tests/fixtures/phase-2b-protected.json').read_text())
         for filename,digest in expected.items():
+            if filename=='broker.py':
+                reviewed=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['admin_runtime_sha256'][filename]
+                self.assertEqual(hashlib.sha256((ROOT/filename).read_bytes()).hexdigest(),reviewed)
+                continue
             if filename in ('dashboard.py', 'scanner.py'):
                 continue # Phase 3 explicitly authorizes dashboard security changes.
             with self.subTest(filename=filename):

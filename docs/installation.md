@@ -1,6 +1,6 @@
 # Installation, upgrade, rollback and removal
 
-Version 0.5.1-beta is prepared for first public release. These
+Version 0.6.0-beta is prepared for first public release. These
 commands are instructions for a **separately authorized Debian 12 ASL3 target or
 disposable acceptance environment**. They have not been run on the production Pi
 or used to install services on the Linux Mint development host.
@@ -395,3 +395,48 @@ pinned. No automatic pruning is implemented; disk usage remains unbounded.
 Do not delete releases/backups manually while a transaction is pending. Locked
 service identities remain after uninstall; manual account deletion requires a
 separate ownership/reference audit and operator approval.
+
+## Admin helper installation and upgrade
+
+0.6.0-beta installs/enables a fourth primary service,
+`kc1ray-hub-scanner-admin.service`, before broker, monitor and web. It is a
+restricted root helper for configuration, credentials and the two schedule timers;
+it has no Asterisk access. An upgrade from older manifests automatically adds and
+starts it without new configuration keys, preserving operator configuration,
+credentials, favorites, history and existing service states. Existing backups
+without the new unit remain accepted for rollback. Normal uninstall removes the
+unit and retains operator data and locked service identities.
+
+After a separately approved installation or upgrade, inspect:
+
+```sh
+systemctl status kc1ray-hub-scanner-admin.service --no-pager
+stat -c '%U:%G %a %n' /run/kc1ray-hub-scanner-admin /run/kc1ray-hub-scanner-admin/admin.sock
+```
+
+Expect root:kc1ray-control, directory 750 and socket 660. Sign in, open Admin,
+check the reported statuses, change refresh and verify live behavior. Test source
+timer changes, a failed operation/rollback, password reauthentication and rejection
+of old sessions. Verify anonymous API mutations remain forbidden. Repeat through
+`/hubscanner/` if using Apache. These are acceptance instructions, not operations
+performed on the development host.
+
+## Admin helper recovery
+
+If Admin reports recovery required, do not delete its transaction file or manually
+retry an installer rollback over it. Restarting the helper attempts recovery of the
+previous settings/timer state first. For diagnosis without starting the listener,
+on a separately authorized target:
+
+```sh
+sudo systemctl stop kc1ray-hub-scanner-admin.service
+sudo /usr/bin/python3 -B -E -s /opt/kc1ray-hub-scanner/current/admin_service.py --recover-only
+sudo systemctl start kc1ray-hub-scanner-admin.service
+```
+
+If recovery fails, retain the private journal and backups, inspect fixed timer
+availability and permissions, and repair the reported prerequisite before retrying.
+Do not publish the journal or credentials. Package install/upgrade/rollback/uninstall
+refuse a pending Admin transaction, preventing recovery from overwriting restored
+package configuration. Damaged configuration may require restoring a validated
+operator backup before helper recovery; never erase retained favorites or history.

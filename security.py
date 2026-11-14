@@ -74,6 +74,7 @@ class Credentials:
             raw = stream.read(4097)
         if len(raw)>4096:
             raise ValueError('Invalid credentials file')
+        self.fingerprint=hashlib.sha256(raw).hexdigest()
         data=json.loads(raw)
         if not isinstance(data,dict):
             raise ValueError('Invalid credentials schema')
@@ -190,6 +191,9 @@ class Sessions:
             with self.lock:
                 self.items.pop(hashlib.sha256(token.encode()).hexdigest(),None)
 
+    def revoke_all(self):
+        with self.lock:self.items.clear()
+
     def rotate(self,token,secure,username):
         with self.lock:
             if self.lookup(token,secure) is None:
@@ -283,7 +287,9 @@ class Security:
             raise Denied(429,'Login busy',1)
         try:
             try:
-                valid=self.credentials.verify(payload['username'],payload['password'])
+                from admin_settings import guard
+                with guard('password.lock',exclusive=True):
+                    valid=self.credentials.verify(payload['username'],payload['password'])
             except (ValueError,TypeError,UnicodeError):
                 valid=False
         finally:

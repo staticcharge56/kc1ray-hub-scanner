@@ -15,6 +15,7 @@ import threading
 from configuration import CONFIG, require_node, DEFAULT_PATH
 from control_service import ControlService
 from security import Denied
+from admin_settings import guard,refresh
 
 MAX_REQUEST=8192
 MAX_RESPONSE=262144
@@ -73,12 +74,17 @@ class Router:
         if op=='control':
             return self.service.control(payload)
         if op=='favorites':
-            if not self.driver.CONFIG['web']['controls_enabled']:
-                raise Denied(403,'Mutations disabled by configuration')
-            if not isinstance(payload,dict) or not set(payload)<= {'action','node','name'}:
-                raise Denied(400,'Invalid favorites request')
-            return {'favorites':self.driver.favorites_store.mutate(payload)}
+            with guard():
+                refresh(self.driver.CONFIG)
+                return self.favorites(payload)
         raise Denied(400,'Unsupported local operation')
+
+    def favorites(self,payload):
+        if not self.driver.CONFIG['web']['controls_enabled']:
+            raise Denied(403,'Mutations disabled by configuration')
+        if not isinstance(payload,dict) or not set(payload)<= {'action','node','name'}:
+            raise Denied(400,'Invalid favorites request')
+        return {'favorites':self.driver.favorites_store.mutate(payload)}
 
 
 class Handler(socketserver.BaseRequestHandler):
