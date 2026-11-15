@@ -109,9 +109,9 @@ management API/store continues to use only node/name. See
 
 All three routes require an authenticated administrator even with anonymous viewing.
 Use the existing cookie, origin and CSRF sequence; prepend `/hubscanner` in Apache
-mode. GET `/api/admin` returns only the five supported `settings`, an opaque
+mode. GET `/api/admin` returns the supported `settings`, an opaque
 configuration `revision`, `recovery_required`, cached `source_updates` timestamps
-and read-only `status` (version, local node, web method, three primary application
+and read-only `status` (version, local node, web method, four application
 service states, two timer states and last successful monitor sample time).
 Unavailable timestamps are null. No external statistics/schedule request is made.
 
@@ -131,5 +131,28 @@ Success returns a message and `reauthenticate: true`, revokes every session and
 expires the caller's prefix-scoped cookie. No password/hash/secret is returned.
 Both POST routes use existing sensitive-operation limits. The helper separately
 limits current-password attempts using the configured login attempt/window limits;
-status is limited to 30 helper requests/minute. This API cannot change node,
-cooldown, software, Apache, firewall, arbitrary services or filesystem paths.
+status is limited to 30 helper requests/minute. This API cannot change software, Apache, firewall, arbitrary services or filesystem
+paths. Phase 2 extends the same protected routes as described below.
+
+## Phase 2 administration (0.7.0-beta)
+
+The same GET/POST routes, authentication, CSRF, origins and rate limits apply.
+`settings` additionally contains `local_node`, `cooldown_seconds`,
+`poll_interval_seconds`, `max_stats_age_seconds`, `activity_window_seconds`,
+`netwatch_interval_minutes` and `allstarnets_frequency`. POST settings accepts any
+subset. Node changes require `confirm_node_change: true` and membership in the
+server's discovered static node list; `#exec` is never evaluated. Unsupported
+values fail before any write. Timer frequency can be null/unavailable in GET if
+custom configuration is present; clients must omit it rather than sending null.
+See [documented limits](admin-advanced.md#backend-monitoring-versus-dashboard-refresh).
+
+GET also returns safe `local_nodes`, `schedule_available`, `connections` from the
+existing restricted broker, sanitized `diagnostics`, and an installed `status.release`
+identifier. Failed link queries are unavailable, not confirmed empty. Source cache
+health, sample freshness and API error/backoff states are separate. Diagnostics
+refresh uses this GET; it does not extend session inactivity or make new upstream
+statistics/schedule requests. Link queries retain their existing five-second cache.
+The revision includes owned timer frequency files. 409 requires reload/confirmation;
+429 means another operation holds a lock; 503 reports failure/recovery. Settings
+may restart only an affected active broker/monitor or an enabled changed timer.
+No arbitrary commands, paths, logs, units or calendar expressions are accepted.

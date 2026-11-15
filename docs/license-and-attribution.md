@@ -1,4 +1,4 @@
-# License and attribution — 0.6.0-beta
+# License and attribution — 0.7.0-beta
 
 The project owner has approved the MIT license and copyright attribution:
 "Copyright (c) 2026 KC1RAY Hub Scanner contributors". The complete license is in

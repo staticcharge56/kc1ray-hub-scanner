@@ -1,3 +1,5 @@
+# Configuration used by 0.7.0-beta Admin; see docs/admin-advanced.md.
+# Schedule frequency uses owned systemd drop-ins, not extra TOML keys.
 # Implemented configuration through Phase 4. Copy once; never overwrite on upgrade.
 # Set KC1RAY_CONFIG to the absolute path to your private TOML file.
 # No node is assumed. Configure it before starting an application entry point.

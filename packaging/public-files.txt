@@ -1,3 +1,4 @@
+admin_advanced.py
 .gitignore
 LICENSE
 README.md
@@ -18,6 +19,7 @@ control_service.py
 dashboard.py
 docs/activity-monitoring.md
 docs/api.md
+docs/admin-advanced.md
 docs/arm64-hardware-acceptance.md
 docs/asterisk-integration.md
 docs/asterisk-socket-access.md
@@ -67,6 +69,7 @@ tests/fixtures/radio-policy-protected.json
 tests/fixtures/runtime-baseline.json
 tests/test_acceptance.py
 tests/test_admin.py
+tests/test_admin_advanced.py
 tests/test_asterisk_socket.py
 tests/test_baseline.py
 tests/test_configuration_favorites.py

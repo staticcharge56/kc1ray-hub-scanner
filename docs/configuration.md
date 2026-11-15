@@ -211,3 +211,13 @@ rollback is recorded for recovery and prevents further updates. Other configurat
 settings, including node, proxies, Apache and firewall, remain outside Admin.
 Manual configuration edits still require the usual validation/restarts for fields
 outside these five supported live settings.
+
+## Advanced Admin settings (0.7.0-beta)
+
+[The Phase 2 guide](admin-advanced.md) defines supported node selection, cooldown,
+polling/freshness ranges and actual timer semantics. Existing TOML keys are reused;
+there are no mandatory new keys or configuration schema changes. Schedule frequency
+is stored as owned systemd timer drop-ins, not invented TOML polling options.
+The configuration revision now covers those files as well as TOML, so stale browser
+edits cannot overwrite another administrator's schedule change. Unedited fields,
+credentials, ownership and modes retain Phase 1 protections.

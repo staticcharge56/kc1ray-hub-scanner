@@ -510,6 +510,7 @@ class EmptyStatusHttpTests(OfflineCase):
         import security
         from test_security import HttpSecurityTests, PASSWORD
         self.enterContext(patch.object(dashboard,'LOCAL_NODE','1000'))
+        self.enterContext(patch.dict(configuration.CONFIG['allstar'],local_node='1000'))
         self.enterContext(patch.object(dashboard,'ASTERISK','/tmp/synthetic-asterisk'))
         self.enterContext(patch.dict(configuration.CONFIG['web'],deepcopy(configuration.DEFAULTS['web'])))
         self.enterContext(patch.dict(configuration.CONFIG['auth'],deepcopy(configuration.DEFAULTS['auth'])))

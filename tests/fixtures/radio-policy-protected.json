@@ -14,8 +14,20 @@
   "admin_runtime_sha256": {
     "security.py": "6a882df76db3442266af9a6ee757dff92568b1fc399d6b1c91e3ceed8b5cd40d",
     "web_auth.py": "77ba8b3898007d9bd4efca998b097abccce0ff7845d75d3be458c6743b730f11",
+    "broker.py": "391672bafbd64724828ddbf71f3cf6a701ed9ef4de6dec1ba9025c6a70e39c18",
+    "control_service.py": "ded6300c96b52de533c7e253ca231ba9279345233c19207d2c7dc63d50283f65"
+  },
+  "dashboard_admin_http_sha256": "1931f91999ee15f09f3475b1e3e9adad2b41528d9d5d2c07b6ff57f81fa003ab",
+  "phase1_admin_runtime_sha256": {
+    "security.py": "6a882df76db3442266af9a6ee757dff92568b1fc399d6b1c91e3ceed8b5cd40d",
+    "web_auth.py": "77ba8b3898007d9bd4efca998b097abccce0ff7845d75d3be458c6743b730f11",
     "broker.py": "962408d9c2a9e690359df04bf30e5ca62048a55dc2f20e8c0349d3fda658f104",
     "control_service.py": "ded6300c96b52de533c7e253ca231ba9279345233c19207d2c7dc63d50283f65"
   },
-  "dashboard_admin_http_sha256": "3b7c82afc43f0570cc82994c97bc2f811a77a5335c55afbfd32486cba0591aa1"
+  "phase1_dashboard_admin_http_sha256": "3b7c82afc43f0570cc82994c97bc2f811a77a5335c55afbfd32486cba0591aa1",
+  "advanced_runtime_sha256": {
+    "monitor.py": "7d817019090748d2b855ae9216c28f2bda6f71438f10c7c88a448fd5c9864128",
+    "activity_history.py": "c505b6672eaab807440aad4e2912683bf1c953a0e2fe93c2d82ec1bcf77a4ab5",
+    "scanner.py": "741233202496b8dc5992c5000e9923c9e824a1b25aa738da9b586571fd9de4ed"
+  }
 }

@@ -23,19 +23,21 @@ class FakeSystem(service.Systemd):
     def __init__(self):
         self.states={unit:dict(active=False,enabled=False,active_state='inactive',enabled_state='disabled') for unit in service.UNITS}
         self.commands=[];self.fail=None
+    def reload(self):self.commands.append(('daemon-reload',None,False))
+    def recent_logs(self):return []
     def state(self,unit):return deepcopy(self.states[unit])
     def command(self,action,unit,*,runtime=False,check=True):
-        if unit not in service.UNITS or action not in ('enable','disable','start','stop'):raise AssertionError('Unexpected system operation')
+        if unit not in service.UNITS or action not in ('enable','disable','start','stop','restart'):raise AssertionError('Unexpected system operation')
         self.commands.append((action,unit,runtime))
         if self.fail and self.fail(action,unit):raise security.Denied(503,'Timer operation failed: '+unit)
         state=self.states[unit]
         if action in ('enable','disable'):
             state['enabled']=action=='enable';state['enabled_state']=('enabled-runtime' if runtime else 'enabled') if state['enabled'] else 'disabled'
-        else:state['active']=action=='start';state['active_state']='active' if state['active'] else 'inactive'
+        else:state['active']=action in ('start','restart');state['active_state']='active' if state['active'] else 'inactive'
         return SimpleNamespace(returncode=0,stdout='')
 
 
-class AdminStateTests(OfflineCase):
+class AdminEnvironment(OfflineCase):
     def setUp(self):
         super().setUp()
         self.config=self.tmp/'config.toml';self.credentials=self.tmp/'credentials.json'
@@ -44,17 +46,24 @@ class AdminStateTests(OfflineCase):
         for name in ('policy.lock','password.lock'):
             (self.runtime/name).touch();(self.runtime/name).chmod(0o640)
         data=deepcopy(configuration.DEFAULTS)
-        data['allstar']['local_node']='1000';data['paths']['cache_dir']=str(self.tmp)
+        data['allstar']['local_node']='1000';data['paths']['cache_dir']=str(self.tmp);data['paths']['state_dir']=str(self.tmp)
         data['auth']['credentials_file']=str(self.credentials)
         data['web'].update(controls_enabled=True,allowed_origins=['https://scanner.test'],trusted_proxies=['127.0.0.1/32'])
         self.config.write_bytes(service.encode_toml(data));self.config.chmod(0o640)
         security.create_credentials(self.credentials,'admin',PASSWORD);self.credentials.chmod(0o640)
-        self.system=FakeSystem();self.admin=service.Administration(self.config,self.state,self.runtime,self.package,self.system)
+        self.units=self.tmp/'units';self.units.mkdir()
+        for source,unit in service.TIMERS.items():
+            (self.units/(unit+'.d')).mkdir(mode=0o755)
+            (self.units/unit).write_bytes((ROOT/'packaging/systemd'/(unit+'.in')).read_bytes())
+        self.system=FakeSystem();self.admin=service.Administration(self.config,self.state,self.runtime,self.package,self.system,unit_dir=self.units,node_discovery=lambda:(['1000','2000'],False))
         self.before=self.config.read_bytes()
-    def payload(self,**changes):return dict(revision=hashlib.sha256(self.config.read_bytes()).hexdigest(),settings=changes)
+    def payload(self,**changes):return dict(revision=self.admin.revision(self.config.read_bytes()),settings=changes)
+
+
+class AdminStateTests(AdminEnvironment):
     def test_status_contains_only_approved_projection(self):
         result=self.admin.dispatch(dict(op='status',payload=None));text=json.dumps(result)
-        self.assertEqual(set(result['settings']),set(settings.FIELDS))
+        self.assertEqual(set(result['settings']),set(settings.FIELDS+service.advanced.SCHEDULE_FIELDS))
         for secret in ('credentials_file','trusted_proxies','digest','salt',PASSWORD):self.assertNotIn(secret,text)
         self.assertEqual(result['status']['local_node'],'1000')
         self.assertEqual(set(result['status']['services']),set(service.UNITS))
@@ -228,6 +237,17 @@ class AdminHttpTests(OfflineCase):
         self.assertEqual(self.request('POST','/api/admin/settings',{}, {'Cookie':cookie,'X-CSRF-Token':csrf})[0],200)
         token,_=self.auth.sessions.create(False,'another-user')
         self.assertEqual(self.request('GET','/api/admin',headers={'Cookie':security.COOKIE+'='+token})[0],403)
+    def test_advanced_settings_reuse_admin_csrf_and_origin_checks(self):
+        cookie,csrf=self.login()
+        body=dict(revision='0'*64,settings={'cooldown_seconds':30,'local_node':'2000'},confirm_node_change=True)
+        headers={'Cookie':cookie,'X-CSRF-Token':csrf}
+        self.assertEqual(self.request('POST','/api/admin/settings',body,headers)[0],200)
+        self.admin.assert_called_with('settings',body)
+        count=self.admin.call_count
+        self.assertEqual(self.request('POST','/api/admin/settings',body,headers|{'Origin':'https://untrusted.test'})[0],403)
+        self.assertEqual(self.request('POST','/api/admin/settings',body,{'Cookie':cookie})[0],403)
+        self.assertEqual(self.admin.call_count,count)
+
     def test_password_change_invalidates_all_sessions(self):
         cookie,csrf=self.login();other,_=self.login()
         status,headers,_=self.request('POST','/api/admin/password',dict(current_password=PASSWORD,new_password='abcdefgh',confirmation='abcdefgh'),{'Cookie':cookie,'X-CSRF-Token':csrf})
@@ -251,7 +271,7 @@ class AdminPackagingTests(PackagingCase):
         unit=self.host.path(pkg.UNIT_DIR/'kc1ray-hub-scanner-admin.service').read_text()
         self.assertIn('User=root',unit);self.assertIn('CapabilityBoundingSet=\n',unit)
         self.assertIn('RestrictAddressFamilies=AF_UNIX',unit)
-        self.assertIn('InaccessiblePaths=-/etc/asterisk -/run/asterisk',unit)
+        self.assertIn('InaccessiblePaths=-/run/asterisk',unit)
         self.assertEqual(set(self.host.users),set(pkg.USERS))
         self.assertTrue(self.host.service_state('kc1ray-hub-scanner-admin.service')['active'])
     def test_upgrade_from_old_manifest_activates_new_helper_and_preserves_accounts(self):
@@ -267,7 +287,7 @@ class AdminPackagingTests(PackagingCase):
     def test_legacy_backup_without_admin_area_still_validates(self):
         self.install();identifier=self.manager.snapshot(self.manager.states())
         path=self.host.path(pkg.REGISTRY/'backups'/identifier/'snapshot.json');data=json.loads(path.read_text())
-        data['areas'].pop('unit-kc1ray-hub-scanner-admin.service');data['services'].pop('kc1ray-hub-scanner-admin.service');path.write_text(json.dumps(data))
+        data['areas'].pop('unit-kc1ray-hub-scanner-admin.service');[data['areas'].pop(area) for area in pkg.TIMER_AREAS];data['services'].pop('kc1ray-hub-scanner-admin.service');path.write_text(json.dumps(data))
         _,restored=self.manager.validate_snapshot(identifier)
         self.assertEqual(restored['areas']['unit-kc1ray-hub-scanner-admin.service'],{})
     def test_pending_admin_change_blocks_packaging(self):

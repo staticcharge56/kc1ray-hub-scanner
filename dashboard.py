@@ -104,7 +104,7 @@ button.selected { background: #2563eb; }
 <main>
 <h1>KC1RAY Hub Scanner</h1>
 <p><span id="account-status">Checking session…</span> · <a id="signin" href="/login">Sign in</a> <button id="logout" hidden>Sign out</button></p>
-<small>AllStarLink Node __LOCAL_NODE__</small>
+<small id="local-node-label">AllStarLink Node __LOCAL_NODE__</small>
 <div class="summary">
   <div><strong id="activeCount">-</strong>Active</div>
   <div><strong id="idleCount">-</strong>Idle</div>
@@ -240,7 +240,9 @@ function netForNode(node, nowSeconds) {
 }
 
 function applyViewSettings(settings) {
+  if(settings && /^[0-9]{3,7}$/.test(settings.local_node||'')){publicConfig.localNode=settings.local_node;const label=document.getElementById('local-node-label');if(label)label.textContent='AllStarLink Node '+settings.local_node;}
   if (!settings || !Number.isInteger(settings.refresh_seconds) || settings.refresh_seconds<=0) return;
+  if(Number.isInteger(settings.stats_max_age_seconds))publicConfig.statsMaxAge=settings.stats_max_age_seconds;
   const milliseconds=settings.refresh_seconds*1000;
   if (milliseconds!==publicConfig.refreshMs) {
     publicConfig.refreshMs=milliseconds;
@@ -395,7 +397,7 @@ async function refreshLinks() {
     directLinkStates = new Map((data.link_states || []).map(link => [String(link.node), link]));
     linksKnown = true;
     document.getElementById('link-status').textContent =
-      directLinks.length ? '__LOCAL_NODE__ directly linked to: ' + directLinks.map(node => node + ' (' + observedLinkState(node) + ')').join(', ') : '__LOCAL_NODE__: No direct links';
+      directLinks.length ? publicConfig.localNode+' directly linked to: ' + directLinks.map(node => node + ' (' + observedLinkState(node) + ')').join(', ') : publicConfig.localNode+': No direct links';
   } catch (err) {
     linksKnown = false;
     document.getElementById('link-status').textContent = 'Connection status unavailable: ' + err.message;
@@ -851,6 +853,7 @@ def direct_links(timeout=8):
 
 def render_html(nonce=None):
     public = {
+        'localNode': CONFIG['allstar']['local_node'],
         'controlsEnabled': CONFIG['web']['controls_enabled'],
         'anonymousView': CONFIG['web']['anonymous_view'],
         'statsMaxAge': CONFIG['monitor']['max_stats_age_seconds'],
@@ -909,6 +912,8 @@ def activity_payload():
     payload['local_node'] = LOCAL_NODE
     payload['net_schedule'] = load_schedule()
     payload['view_settings'] = {key:CONFIG['web'][key] for key in ('refresh_seconds','controls_enabled','anonymous_view')}
+    payload['view_settings']['local_node']=CONFIG['allstar']['local_node']
+    payload['view_settings']['stats_max_age_seconds']=CONFIG['monitor']['max_stats_age_seconds']
     return payload
 
 
@@ -979,11 +984,17 @@ class Handler(BaseHTTPRequestHandler):
                 raise Denied(400,'Duplicate security header')
         self.auth=self.server.security
         refresh_admin(CONFIG,self.auth)
+        self.sync_admin_settings()
         self.auth.rates.take(('read',self.context.client),CONFIG['auth']['read_attempts'],CONFIG['auth']['read_window_seconds'])
         self.token=cookie_token(self.headers,name=self.prefix_cookie_name()) if prefix else cookie_token(self.headers)
         self.session=self.auth.sessions.lookup(self.token,self.context.secure)
         if self.session and self.session.username and not self.context.transport_allowed:
             raise Denied(403,'HTTPS required for administrator access')
+
+    def sync_admin_settings(self):
+        global LOCAL_NODE,COOLDOWN_SECONDS
+        LOCAL_NODE=CONFIG['allstar']['local_node']
+        COOLDOWN_SECONDS=CONFIG['controls']['cooldown_seconds']
 
     def read_json(self,maximum=4096):
         if self.headers.get('Transfer-Encoding') is not None or len(self.headers.get_all('Content-Length',[]))!=1:
@@ -1057,7 +1068,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_body(200,'text/html; charset=utf-8',html.encode())
             elif self.path=='/api/admin':
                 self.auth.authorize(self.session,None)
-                self.json_body(200,admin_rpc('status'))
+                result=admin_rpc('status')
+                try:result['connections']=rpc('links',None)
+                except Denied:result['connections']={'state':'unavailable','links':[],'link_states':[]}
+                self.json_body(200,result)
             elif self.path=='/api/session':
                 self.session_response()
             elif self.path in ('/api/activity','/api/links','/api/favorites'):

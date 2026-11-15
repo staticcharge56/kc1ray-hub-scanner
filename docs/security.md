@@ -279,17 +279,20 @@ Other applications on the selected origin (including AllScan) share its browser
 trust boundary. Keep those applications trusted and maintained; use a separately
 selected hostname/vhost when stronger origin separation is required.
 
-## Restricted administration helper (0.6.0-beta)
+## Restricted administration helper (0.7.0-beta)
 
 The new `kc1ray-hub-scanner-admin.service` is a root helper, separate from the
-radio broker. It has no Asterisk groups or commands, cannot access `/etc/asterisk`
-or `/run/asterisk`, permits AF_UNIX only and has an empty capability bounding set.
+radio broker. It has no Asterisk groups or commands, reads `/etc/asterisk` only for bounded
+local-node discovery, cannot access `/run/asterisk`, permits AF_UNIX only and has
+an empty capability bounding set. It cannot write Asterisk configuration.
 Existing web, monitor and radio account permissions remain unchanged. Its
 root:kc1ray-control socket is mode 0660 in a root-owned 0750 runtime directory.
 SO_PEERCRED accepts only the configured web UID, including rejection of the radio
 UID. The web client also requires a root peer. Requests have bounded framing,
 fixed operations and fixed systemd unit allowlists; no HTTP paths, shell commands
-or unit names are accepted. Only the two schedule timers can be changed.
+or unit names are accepted. Only the two schedule timers and their owned frequency overrides can be changed;
+only the broker and monitor can be restarted for relevant settings. No web/Admin,
+Apache, firewall or Asterisk service management is exposed.
 
 Every Admin endpoint requires the existing administrator session, including when
 anonymous viewing is enabled; mutations retain origin, CSRF and sensitive-operation
@@ -307,3 +310,12 @@ Normal uninstall retains this private state; explicit confirmed purge removes it
 Installed UID/group enforcement, root-helper sandbox and systemd authorization
 must still be acceptance-tested on Debian 12 ASL3; local modeled tests cannot
 establish those hardware/system-manager properties.
+
+Phase 2 adds only two fixed timer drop-in directories to the helper write sandbox.
+Application health includes Admin itself. Journal reads use fixed application units,
+time/count/byte bounds, and convert known message prefixes to fixed summaries;
+raw messages and upstream errors never leave the helper. Node changes require a
+confirmed locally discovered node and cleared scanner selection. An authorized,
+read-only-to-monitor history handoff retains same-source observations/backoff
+without changing activity verification. CLI calls participate in the same policy
+lock. See [the Phase 2 guide](admin-advanced.md) for limits and acceptance gaps.

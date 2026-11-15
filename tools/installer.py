@@ -58,7 +58,7 @@ UNITS=tuple(PREFIX+x for x in ('broker.service','monitor.service','web.service',
 STOP_ORDER=tuple(PREFIX+x for x in ('netwatch.timer','allstarnets.timer','admin.service','web.service',
                                   'monitor.service','netwatch.service','allstarnets.service','broker.service'))
 MAIN_UNITS=tuple(PREFIX+x+'.service' for x in ('admin','broker','monitor','web'))
-APP_FILES=('admin_service.py','admin_settings.py','admin_ui.py','radio_control.py','activity_history.py','broker.py','configuration.py','control_service.py','dashboard.py',
+APP_FILES=('admin_advanced.py','admin_service.py','admin_settings.py','admin_ui.py','radio_control.py','activity_history.py','broker.py','configuration.py','control_service.py','dashboard.py',
            'favorites_store.py','manage_admin.py','migrate_favorites.py','monitor.py','scanner.py',
            'security.py','stats_api.py','update-nets.py','update_netwatch.py','web_auth.py')
 GROUPS=('kc1ray-read','kc1ray-control','kc1ray-web')
@@ -69,6 +69,8 @@ PURGE_PHRASE='PURGE KC1RAY HUB SCANNER'
 AREAS={'program':APP,'config':CONF,'state':STATE,'monitor':MONITOR_STATE,'cache':CACHE,
        'launcher':LAUNCHER,'tmpfiles':TMPFILES,'manifest':REGISTRY/'manifest.json'}
 AREAS.update({'unit-'+name:UNIT_DIR/name for name in UNITS})
+TIMER_AREAS={'timer-'+source:UNIT_DIR/(PREFIX+source+'.timer.d') for source in ('netwatch','allstarnets')}
+AREAS.update(TIMER_AREAS)
 SAFE_ENV={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C.UTF-8'}
 APACHE_CONFIG=Path('/etc/apache2/conf-enabled/kc1ray-hub-scanner.conf')
 ASTERISK_SOCKET=Path('/run/asterisk/asterisk.ctl')
@@ -963,6 +965,11 @@ class Manager:
         return target
 
     def write_units(self,group,ids):
+        for path in TIMER_AREAS.values():
+            mkdir(self.host,path,0o755)
+            saved=self.host.path(CONF/'retained-timers'/path.name/'50-hubscanner-admin.conf')
+            if saved.exists() and not self.host.path(path/'50-hubscanner-admin.conf').exists():
+                atomic(self.host,path/'50-hubscanner-admin.conf',saved.read_bytes(),0o640,0,0)
         if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]{0,63}',group):
             raise InstallError('Invalid Asterisk group name for unit rendering')
         digests={}
@@ -1114,10 +1121,12 @@ class Manager:
             raise InstallError('Invalid backup identifier')
         base=REGISTRY/'backups'/identifier
         metadata=read_json(self.host,base/'snapshot.json')
-        old_areas=set(AREAS)-{'unit-'+PREFIX+'admin.service'}
-        if not metadata or metadata.get('complete') is not True or set(metadata.get('areas',{})) not in (set(AREAS),old_areas):
+        phase1=set(AREAS)-set(TIMER_AREAS)
+        old_areas=phase1-{'unit-'+PREFIX+'admin.service'}
+        if not metadata or metadata.get('complete') is not True or set(metadata.get('areas',{})) not in (set(AREAS),phase1,old_areas):
             raise InstallError('Backup is incomplete or unsupported')
         metadata['areas'].setdefault('unit-'+PREFIX+'admin.service',{})
+        for area in TIMER_AREAS:metadata['areas'].setdefault(area,{})
         metadata['services'].setdefault(PREFIX+'admin.service',dict(enabled=False,active=False,enable_state='not-found'))
         apache_text(metadata.get('apache',[]))
         firewall=metadata.get('firewall',[])
@@ -1338,6 +1347,12 @@ class Manager:
                 json_write(self.host,REGISTRY/'transaction.json',{'action':'uninstall','backup':backup})
                 self.apache_set([])
                 self.firewall_set([])
+                for directory in TIMER_AREAS.values():
+                    owned=self.host.path(directory/'50-hubscanner-admin.conf')
+                    if owned.exists():
+                        saved=CONF/'retained-timers'/directory.name/'50-hubscanner-admin.conf'
+                        atomic(self.host,saved,owned.read_bytes(),0o640,0,0)
+                        self.remove(directory/'50-hubscanner-admin.conf')
                 for name in UNITS:
                     if self.host.path(UNIT_DIR/name).exists():
                         self.host.run(['systemctl','disable',name])

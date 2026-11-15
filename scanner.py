@@ -127,7 +127,7 @@ def _scan(action, apply):
     return message
 
 
-def main():
+def _main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["first", "next", "stop"])
     parser.add_argument(
@@ -145,6 +145,17 @@ def main():
     else:
         scan(args.action, False)
 
+
+
+def main():
+    # Serialize trusted CLI/DTMF invocations with Admin node/cooldown changes too.
+    from admin_settings import guard,refresh
+    global NODE,MAX_AGE
+    with guard():
+        refresh(CONFIG)
+        NODE=CONFIG['allstar']['local_node']
+        MAX_AGE=CONFIG['monitor']['max_stats_age_seconds']
+        _main()
 
 
 if __name__ == "__main__":

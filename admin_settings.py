@@ -11,26 +11,30 @@ import stat
 import threading
 from configuration import CONFIG,DEFAULT_PATH,load_config
 from security import Credentials, Denied
+import admin_advanced as advanced
 
 RUNTIME=Path('/run/kc1ray-hub-scanner-admin')
 STATE=Path('/var/lib/kc1ray-hub-scanner-admin')
 SOCKET=RUNTIME/'admin.sock'
 MARKER=RUNTIME/'settings.json'
 REFRESH_CHOICES=(5,10,15,30,60)
-FIELDS=('refresh_seconds','controls_enabled','anonymous_view','netwatch_enabled','allstarnets_enabled')
+PHASE1_FIELDS=('refresh_seconds','controls_enabled','anonymous_view','netwatch_enabled','allstarnets_enabled')
+FIELDS=(*PHASE1_FIELDS,*advanced.PATHS)
 _lock=threading.RLock()
 
 
 def selected(config):
     return dict(refresh_seconds=config['web']['refresh_seconds'],controls_enabled=config['web']['controls_enabled'],
                 anonymous_view=config['web']['anonymous_view'],netwatch_enabled=config['schedules']['netwatch']['enabled'],
-                allstarnets_enabled=config['schedules']['allstarnets']['enabled'])
+                allstarnets_enabled=config['schedules']['allstarnets']['enabled']) | {key:config[section][field] for key,(section,field) in advanced.PATHS.items()}
 
 
 def validate(changes,current):
-    if not isinstance(changes,dict) or not set(changes)<=set(FIELDS):
-        raise Denied(400,'Only Phase 1 settings can be changed')
+    if not isinstance(changes,dict) or not set(changes)<=set(FIELDS+advanced.SCHEDULE_FIELDS):
+        raise Denied(400,'Only approved Admin settings can be changed')
+    advanced.validate({key:value for key,value in changes.items() if key in advanced.PATHS or key in advanced.SCHEDULE_FIELDS},current)
     for key,value in changes.items():
+        if key in advanced.PATHS or key in advanced.SCHEDULE_FIELDS:continue
         if key=='refresh_seconds':
             if type(value) is not int or (value not in REFRESH_CHOICES and value!=current[key]):
                 raise Denied(400,'Choose a refresh interval of 5, 10, 15, 30 or 60 seconds')
@@ -42,6 +46,7 @@ def validate(changes,current):
 def apply(config,values):
     for key in ('refresh_seconds','controls_enabled','anonymous_view'):config['web'][key]=values[key]
     for key in ('netwatch','allstarnets'):config['schedules'][key]['enabled']=values[key+'_enabled']
+    for key,(section,field) in advanced.PATHS.items():config[section][field]=values[key]
 
 
 def trusted(path,owner=0):
@@ -117,7 +122,7 @@ def rpc(op,payload=None):
         raise Denied(503,'Administration requires the configured web identity')
     try:
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
-            connection.settimeout(30)
+            connection.settimeout(120)
             connection.connect(str(SOCKET))
             if peer_uid(connection)!=0:raise Denied(503,'Untrusted administration service')
             raw=json.dumps(dict(op=op,payload=payload),ensure_ascii=False).encode()+b'\n'

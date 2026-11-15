@@ -1,6 +1,6 @@
 # Installation, upgrade, rollback and removal
 
-Version 0.6.0-beta is prepared for first public release. These
+Version 0.7.0-beta is prepared for first public release. These
 commands are instructions for a **separately authorized Debian 12 ASL3 target or
 disposable acceptance environment**. They have not been run on the production Pi
 or used to install services on the Linux Mint development host.
@@ -440,3 +440,15 @@ Do not publish the journal or credentials. Package install/upgrade/rollback/unin
 refuse a pending Admin transaction, preventing recovery from overwriting restored
 package configuration. Damaged configuration may require restoring a validated
 operator backup before helper recovery; never erase retained favorites or history.
+
+## Upgrade from 0.6.0-beta to Phase 2
+
+Use the existing documented upgrade dry run and execution workflow after target
+approval. No additional configuration keys, passwords, packages, Asterisk groups
+or capabilities are required. The installer creates the two fixed root-owned timer
+drop-in directories before the Admin helper starts, updates its sandbox and retains
+operator configuration, credentials and schedule overrides. Old 0.6.0 snapshots
+remain accepted. The new installer includes timer areas in backup/rollback; use it
+for Phase 2 lifecycle operations. Normal uninstall retains owned schedule data for
+reinstall while removing its active overrides. See [Advanced administration](admin-advanced.md)
+for supported schedules, failure recovery and the RF-disabled spare-Pi checklist.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Root-only, UID-restricted helper for five settings and password changes. No radio operations."""
+"""Root-only, UID-restricted helper for approved settings, diagnostics and password changes. No radio operations."""
 from contextlib import contextmanager,ExitStack
 import argparse
 import fcntl
@@ -20,21 +20,25 @@ import sys
 import tempfile
 import time
 import tomllib
+import select
+import admin_advanced as advanced
 from configuration import DEFAULT_PATH,load_config,CONFIG
 from security import Credentials,create_credentials,Denied,RateLimits
 from admin_settings import RUNTIME,STATE,SOCKET,selected,validate,apply,FIELDS
 from broker import Server,peer_uid,receive
 
 PREFIX='kc1ray-hub-scanner-'
-SERVICES=tuple(PREFIX+x+'.service' for x in ('web','broker','monitor'))
+SERVICES=tuple(PREFIX+x+'.service' for x in ('web','broker','monitor','admin'))
 TIMERS={key:PREFIX+key+'.timer' for key in ('netwatch','allstarnets')}
 UNITS=(*SERVICES,*TIMERS.values())
 PACKAGE=Path('/var/lib/kc1ray-hub-scanner-package')
+UNIT_DIR=Path('/etc/systemd/system')
+RESTARTABLE={PREFIX+'broker.service',PREFIX+'monitor.service'}
 
 
 class Systemd:
     def command(self,action,unit,*,runtime=False,check=True):
-        if unit not in UNITS or action not in ('is-active','is-enabled','enable','disable','start','stop') or (action not in ('is-active','is-enabled') and unit not in TIMERS.values()):
+        if unit not in UNITS or action not in ('is-active','is-enabled','enable','disable','start','stop','restart') or (action=='restart' and unit not in {*TIMERS.values(),*RESTARTABLE}) or (action not in ('is-active','is-enabled','restart') and unit not in TIMERS.values()):
             raise Denied(400,'Unsupported service operation')
         args=['/usr/bin/systemctl','--no-ask-password',action]+(['--runtime'] if runtime else [])+[unit]
         try:
@@ -42,6 +46,31 @@ class Systemd:
         except (OSError,subprocess.TimeoutExpired):raise Denied(503,'Service operation unavailable: '+unit) from None
         if check and result.returncode:raise Denied(503,'Service operation failed: '+unit)
         return result
+
+    def reload(self):
+        try:
+            result=subprocess.run(['/usr/bin/systemctl','--no-ask-password','daemon-reload'],capture_output=True,timeout=10)
+        except (OSError,subprocess.TimeoutExpired):raise Denied(503,'Timer configuration reload failed') from None
+        if result.returncode:raise Denied(503,'Timer configuration reload failed')
+
+    def recent_logs(self):
+        args=['/usr/bin/journalctl','--no-pager','--quiet','--output=json','--output-fields=MESSAGE,_SYSTEMD_UNIT,__REALTIME_TIMESTAMP','--since=-24h','-n','100']
+        for name in ('web','broker','monitor','admin','netwatch','allstarnets'):args+=['--unit='+PREFIX+name+'.service']
+        try:
+            with subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL) as child:
+                raw=bytearray();deadline=time.monotonic()+5
+                try:
+                    while len(raw)<65536 and time.monotonic()<deadline:
+                        if not select.select([child.stdout],[],[],max(0,deadline-time.monotonic()))[0]:break
+                        block=os.read(child.stdout.fileno(),min(8192,65536-len(raw)))
+                        if not block:break
+                        raw.extend(block)
+                finally:
+                    if child.poll() is None:child.kill()
+                    child.wait(timeout=2)
+            if child.returncode and len(raw)<65536:return None
+            return advanced.safe_logs(raw.decode('utf-8',errors='replace'))
+        except (OSError,subprocess.SubprocessError):return None
 
     def state(self,unit):
         active=self.command('is-active',unit,check=False).stdout.strip()
@@ -106,10 +135,96 @@ def encode_toml(data):
 
 
 class Administration:
-    def __init__(self,config=DEFAULT_PATH,state=STATE,runtime=RUNTIME,package=PACKAGE,system=None):
+    def __init__(self,config=DEFAULT_PATH,state=STATE,runtime=RUNTIME,package=PACKAGE,system=None,unit_dir=UNIT_DIR,node_discovery=None):
         self.config=Path(config);self.state=Path(state);self.runtime=Path(runtime);self.package=Path(package)
         self.system=system or Systemd();self.rates=RateLimits()
         self.journal=self.state/'transaction.json'
+        self.unit_dir=Path(unit_dir);self.node_discovery=node_discovery or self.discover_nodes
+
+    def discover_nodes(self):
+        from tools.installer import discover_nodes,Host
+        nodes,dynamic=discover_nodes(Host())
+        return nodes,dynamic
+
+    def local_nodes(self):
+        try:
+            nodes,dynamic=self.node_discovery()
+            if not isinstance(nodes,list) or any(not isinstance(node,str) or not re.fullmatch(r'[0-9]{3,7}',node) for node in nodes):raise ValueError()
+            return dict(nodes=nodes,dynamic=bool(dynamic),available=True)
+        except Exception:return dict(nodes=[],dynamic=False,available=False)
+
+    def dropin(self,source):return self.unit_dir/(TIMERS[source]+'.d')/advanced.DROPIN
+
+    def schedules(self):
+        result={};available={}
+        for source,key,default in (('netwatch','netwatch_interval_minutes',30),('allstarnets','allstarnets_frequency','daily')):
+            directory=self.dropin(source).parent;path=self.dropin(source)
+            try:
+                # Refuse administrator edits if any non-owned timer override exists.
+                for root in (self.unit_dir,*map(Path,('/etc/systemd/system.control','/run/systemd/system','/run/systemd/system.control','/run/systemd/transient','/usr/local/lib/systemd/system','/usr/lib/systemd/system','/lib/systemd/system','/run/systemd/generator.early','/run/systemd/generator','/run/systemd/generator.late'))):
+                    prefixes=('timer.d',TIMERS[source]+'.d','kc1ray-.timer.d','kc1ray-hub-.timer.d','kc1ray-hub-scanner-.timer.d')
+                    for folder in (root/name for name in prefixes):
+                        if folder.exists() and any(file.name!=advanced.DROPIN or folder!=directory for file in folder.glob('*.conf')):raise ValueError()
+                info=directory.stat()
+                if directory.is_symlink() or info.st_uid!=os.geteuid() or info.st_mode & 0o022:raise ValueError()
+                template=(Path(__file__).parent/'packaging/systemd'/(TIMERS[source]+'.in')).read_bytes()
+                if (self.unit_dir/TIMERS[source]).read_bytes()!=template:raise ValueError()
+                value=default
+                if path.exists() or path.is_symlink():
+                    raw,_=self.read(path,4096);text=raw.decode()
+                    choices=range(30,1441) if source=='netwatch' else advanced.CALENDARS
+                    value=next((item for item in choices if text==advanced.timer_text(source,item)),None)
+                    if value is None:raise ValueError()
+                result[key]=value;available[source]=True
+            except (OSError,ValueError,UnicodeError,Denied):result[key]=None;available[source]=False
+        return result,available
+
+    def revision(self,raw):
+        digest=hashlib.sha256(raw)
+        for source in TIMERS:
+            path=self.dropin(source)
+            try:contents,_=self.read(path,4096)
+            except FileNotFoundError:contents=b'absent'
+            except (OSError,Denied):contents=b'unavailable'
+            digest.update(source.encode()+b'\0'+contents+b'\0')
+        return digest.hexdigest()
+
+    def handoff(self,previous,config):
+        path=self.config.parent/'node-handoff.json'
+        source=hashlib.sha256(config['monitor']['stats_url_template'].encode()).hexdigest()
+        # An inactive monitor may not yet have republished under the last node.
+        # Preserve the authorized predecessor chain without trusting cache input.
+        predecessors=[previous]
+        try:
+            raw,_=self.read(path,4096);old=json.loads(raw)
+            if old.get('current')==previous and old.get('source_sha256')==source:
+                predecessors+=old.get('predecessors',[old.get('previous')])
+        except (OSError,ValueError,TypeError,Denied):pass
+        predecessors=[node for node in dict.fromkeys(node for node in predecessors if isinstance(node,str) and re.fullmatch(r'[0-9]{3,7}',node)) if node!=config['allstar']['local_node']][:256]
+        record=dict(previous=previous,predecessors=predecessors,current=config['allstar']['local_node'],source_sha256=source)
+        _,info=self.read(self.config)
+        metadata=type('Owner',(),dict(st_uid=info.st_uid,st_gid=info.st_gid,st_mode=0o640))
+        atomic(path,json.dumps(record).encode(),metadata)
+
+    def capture_schedules(self,sources):
+        saved={}
+        for source in sources:
+            path=self.dropin(source)
+            if path.exists():
+                raw,info=self.read(path,4096)
+                saved[source]=dict(old=raw.hex(),uid=info.st_uid,gid=info.st_gid,mode=stat.S_IMODE(info.st_mode))
+            else:saved[source]=None
+        return saved
+
+    def restore_schedules(self,record):
+        for source,value in record.items():
+            if source not in TIMERS:raise ValueError('Invalid timer recovery source')
+            path=self.dropin(source)
+            if value is None:path.unlink(missing_ok=True)
+            else:
+                info=type('Owner',(),dict(st_uid=value['uid'],st_gid=value['gid'],st_mode=value['mode']))
+                atomic(path,bytes.fromhex(value['old']),info)
+        if record:self.system.reload()
 
     def read(self,path,maximum=262144):
         fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
@@ -136,8 +251,8 @@ class Administration:
 
     def timer_states(self):return {unit:self.system.state(unit) for unit in TIMERS.values()}
 
-    def save_journal(self,path,raw,info,timers):
-        record=dict(path='config' if path==self.config else 'credentials',old=raw.hex(),uid=info.st_uid,gid=info.st_gid,mode=stat.S_IMODE(info.st_mode),timers=timers)
+    def save_journal(self,path,raw,info,timers,services=None,schedules=None):
+        record=dict(path='config' if path==self.config else 'credentials',old=raw.hex(),uid=info.st_uid,gid=info.st_gid,mode=stat.S_IMODE(info.st_mode),timers=timers,services=services or {},schedules=schedules or {})
         atomic(self.journal,json.dumps(record).encode())
 
     def clear_journal(self):
@@ -154,6 +269,14 @@ class Administration:
         else:raise ValueError('Invalid administration recovery record')
         info=type('Owner',(),dict(st_uid=record['uid'],st_gid=record['gid'],st_mode=record['mode']))
         atomic(target,bytes.fromhex(record['old']),info)
+        restored=load_config(self.config)
+        if restored['allstar']['local_node']!=config['allstar']['local_node']:self.handoff(config['allstar']['local_node'],restored)
+        self.restore_schedules(record.get('schedules',{}))
+        for unit,state in record.get('services',{}).items():
+            if unit not in RESTARTABLE:raise ValueError('Invalid recovery service')
+            if state['active']:
+                self.system.command('restart',unit)
+                if not self.system.state(unit)['active']:raise Denied(503,'Application recovery requires attention')
         for unit,state in record['timers'].items():
             if unit not in TIMERS.values():raise ValueError('Invalid recovery unit')
             self.system.restore(unit,state)
@@ -188,25 +311,50 @@ class Administration:
         except (OSError,ValueError,TypeError):pass
         try:apache=bool(json.loads((self.package/'apache.json').read_text()).get('records'))
         except (OSError,ValueError,AttributeError):apache=False
-        return dict(revision=hashlib.sha256(raw).hexdigest(),settings=selected(config),recovery_required=self.journal.exists(),
+        schedule_values,schedule_available=self.schedules()
+        activity=advanced.diagnostics(config,cache)
+        activity['sources']={}
+        for source,file in (('netwatch','netwatch-nets.json'),('allstarnets','nets.json')):
+            updated=self.last_update(cache/file);enabled=config['schedules'][source]['enabled']
+            activity['sources'][source]=dict(last_success=updated,state='disabled' if not enabled else 'unavailable' if updated is None else 'healthy' if time.time()-updated<=config['schedules'][source]['max_age_seconds'] else 'stale')
+        try:release=json.loads((self.package/'manifest.json').read_text()).get('release')
+        except (OSError,ValueError,AttributeError):release=None
+        return dict(revision=self.revision(raw),settings=selected(config)|schedule_values,recovery_required=self.journal.exists(),
+                    local_nodes=self.local_nodes(),schedule_available=schedule_available,
+                    diagnostics=activity|{'recent_events':self.system.recent_logs()},
                     source_updates={'netwatch':self.last_update(cache/'netwatch-nets.json'),'allstarnets':self.last_update(cache/'nets.json')},
-                    status=dict(version=version,local_node=config['allstar']['local_node'],web_access='apache' if apache else 'standalone',
+                    status=dict(version=version,release=release if isinstance(release,str) and re.fullmatch(r'[A-Za-z0-9._-]{1,128}',release) else None,local_node=config['allstar']['local_node'],web_access='apache' if apache else 'standalone',
                                 services={unit:self.system.state(unit) for unit in UNITS},last_monitor_update=last))
 
     def settings(self,payload):
-        if not isinstance(payload,dict) or not {'revision','settings'}<=set(payload) or not set(payload)<={'revision','settings','confirm_disable'}:
+        if not isinstance(payload,dict) or not {'revision','settings'}<=set(payload) or not set(payload)<={'revision','settings','confirm_disable','confirm_node_change'}:
             raise Denied(400,'Invalid settings request')
-        if not isinstance(payload['revision'],str) or not re.fullmatch(r'[0-9a-f]{64}',payload['revision']) or ('confirm_disable' in payload and type(payload['confirm_disable']) is not bool):
+        if not isinstance(payload['revision'],str) or not re.fullmatch(r'[0-9a-f]{64}',payload['revision']) or any(key in payload and type(payload[key]) is not bool for key in ('confirm_disable','confirm_node_change')):
             raise Denied(400,'Invalid settings revision/confirmation')
         with self.locked():
             if self.journal.exists():raise Denied(503,'A previous administration change needs recovery')
             raw,info=self.read(self.config);config=load_config(self.config)
-            if payload['revision']!=hashlib.sha256(raw).hexdigest():raise Denied(409,'Settings changed; reload before saving')
+            if payload['revision']!=self.revision(raw):raise Denied(409,'Settings changed; reload before saving')
             current=selected(config);desired=validate(payload['settings'],current)
             if current['controls_enabled'] and not desired['controls_enabled'] and payload.get('confirm_disable') is not True:
                 raise Denied(409,'Confirm disabling radio controls; existing links will remain unchanged')
+            node_changed=desired['local_node']!=current['local_node']
+            if node_changed:
+                if payload.get('confirm_node_change') is not True:raise Denied(409,'Confirm changing local node; existing Asterisk links are not changed')
+                discovered=self.local_nodes()
+                if not discovered['available'] or desired['local_node'] not in discovered['nodes']:raise Denied(400,'Select a discovered local node; dynamic or unavailable nodes cannot be selected')
+                selection=Path(config['paths']['state_dir'])/'scanner-state.json'
+                if selection.exists():
+                    state=advanced.bounded_json(selection)
+                    if state is None or state.get('node') or state.get('pending_node'):raise Denied(409,'Use STOP to clear the scanner selection before changing local node')
+            schedules,available=self.schedules()
+            schedule_changes={source:desired[key] for source,key in zip(TIMERS,advanced.SCHEDULE_FIELDS) if key in payload['settings'] and desired[key]!=schedules[key]}
+            if any(not available[source] for source in schedule_changes):raise Denied(409,'Custom or unavailable timer configuration requires manual review')
             data=tomllib.loads(raw.decode())
             for key in payload['settings']:
+                if key in advanced.SCHEDULE_FIELDS:continue
+                if key in advanced.PATHS:
+                    section,field=advanced.PATHS[key];data.setdefault(section,{})[field]=desired[key];continue
                 if key in ('netwatch_enabled','allstarnets_enabled'):
                     source=key.removesuffix('_enabled');data.setdefault('schedules',{}).setdefault(source,{})['enabled']=desired[key]
                 else:data.setdefault('web',{})[key]=desired[key]
@@ -214,16 +362,32 @@ class Administration:
             with tempfile.TemporaryDirectory(dir=self.state) as folder:
                 candidate=Path(folder)/'config.toml';candidate.write_bytes(encoded);load_config(candidate)
             timers=self.timer_states()
-            self.save_journal(self.config,raw,info,timers)
+            restart=set()
+            if node_changed or desired['cooldown_seconds']!=current['cooldown_seconds']:restart.add(PREFIX+'broker.service')
+            if node_changed or any(desired[key]!=current[key] for key in ('poll_interval_seconds','max_stats_age_seconds','activity_window_seconds')):restart.add(PREFIX+'monitor.service')
+            services={unit:self.system.state(unit) for unit in sorted(restart)}
+            schedule_backup=self.capture_schedules(schedule_changes)
+            self.save_journal(self.config,raw,info,timers,services,schedule_backup)
             try:
                 self.publish(config,ready=False)
                 atomic(self.config,encoded,info)
+                if node_changed:self.handoff(current['local_node'],load_config(self.config))
+                for source,value in schedule_changes.items():
+                    path=self.dropin(source)
+                    info_old=path.stat() if path.exists() else None
+                    atomic(path,advanced.timer_text(source,value).encode(),info_old,mode=0o640)
+                if schedule_changes:self.system.reload()
+                for unit,state in services.items():
+                    if state['active']:
+                        self.system.command('restart',unit)
+                        if not self.system.state(unit)['active']:raise Denied(503,'Application service did not become active: '+unit)
                 for source,unit in TIMERS.items():
-                    if source+'_enabled' not in payload['settings']:continue
+                    if source+'_enabled' not in payload['settings'] and source not in schedule_changes:continue
                     enabled=desired[source+'_enabled'];actual=self.system.state(unit)
                     if enabled and actual['enabled_state']!='enabled':self.system.command('enable',unit)
                     elif not enabled and actual['enabled']:
                         self.system.command('disable',unit);self.system.command('disable',unit,runtime=True)
+                    if source in schedule_changes and enabled and actual['active']:self.system.command('restart',unit)
                     if actual['active']!=enabled:self.system.command('start' if enabled else 'stop',unit)
                     result=self.system.state(unit)
                     if result['enabled']!=enabled or result['active']!=enabled:raise Denied(503,'Timer did not reach requested state: '+unit)
@@ -287,7 +451,7 @@ class AdminHandler(socketserver.BaseRequestHandler):
 
 def main(recover_only=False):
     if os.geteuid()!=0:raise ValueError('Administration service requires its restricted root service identity')
-    for file in [*Path(__file__).parent.glob('*.py'),DEFAULT_PATH,Path(sys.executable).resolve(),Path('/usr/bin/systemctl')]:
+    for file in [*Path(__file__).parent.glob('*.py'),Path(__file__).parent/'tools/installer.py',DEFAULT_PATH,Path(sys.executable).resolve(),Path('/usr/bin/systemctl')]:
         for path in {file,file.resolve(),*file.resolve().parents}:
             info=path.stat()
             if info.st_uid!=0 or info.st_mode & 0o022:raise ValueError('Administration code/configuration must be root-owned and not writable by others')

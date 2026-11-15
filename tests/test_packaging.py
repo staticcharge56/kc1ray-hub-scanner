@@ -623,7 +623,7 @@ class PackagingBoundaryTests(OfflineCase):
             with self.subTest(name=name):
                 raw=(ROOT/name).read_bytes()
                 if name in ('monitor.py','stats_api.py','activity_history.py'):
-                    reviewed=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['description_runtime_sha256']
+                    reviewed=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['description_runtime_sha256'] | json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['advanced_runtime_sha256']
                     self.assertEqual(hashlib.sha256(raw).hexdigest(),reviewed[name])
                     continue # Reviewed display-only metadata; historical baseline remains intact.
                 if name in ('security.py','web_auth.py'):
@@ -646,7 +646,7 @@ class PackagingBoundaryTests(OfflineCase):
                 self.assertEqual(hashlib.sha256(raw).hexdigest(),digest)
 
     def test_monitor_matches_reviewed_description_increment(self):
-        expected=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['description_runtime_sha256']['monitor.py']
+        expected=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['advanced_runtime_sha256']['monitor.py']
         self.assertEqual(hashlib.sha256((ROOT/'monitor.py').read_bytes()).hexdigest(),expected)
 
 

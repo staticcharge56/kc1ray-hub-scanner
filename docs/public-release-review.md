@@ -1,4 +1,71 @@
-# Current beta review — 0.6.0-beta
+# Current beta review — 0.7.0-beta
+
+Phase 2 extends the existing Admin helper/tab with validated local-node selection,
+cooldown and monitor settings, owned timer frequency overrides and sanitized
+read-only diagnostics. Configuration/data schemas remain version 1 and no dependency
+is added. The public allowlist contains 88 files. No archive, staging, commit,
+deployment or Pi access was performed. The owner reports successful installed
+0.6.0 Phase 1 acceptance; all reports below describe their respective revisions.
+
+New limits, timer semantics, root-helper access, history handoff, recovery and
+installed acceptance requirements are documented in [Advanced administration](admin-advanced.md).
+The web account's permissions remain unchanged. The helper gains read-only local
+node discovery and two fixed timer directories; only active affected broker/monitor
+services and enabled changed timers can be restarted. No Asterisk command,
+configuration, DTMF, Apache or firewall mutation is added to the Admin API.
+
+Release blockers for this increment are spare-Pi verification of the extended
+helper sandbox/discovery permissions, actual timer scheduling and rollback,
+node-change history/backoff handoff, browser/mobile behavior and lifecycle upgrades
+from 0.6.0. Plain trusted-LAN HTTP remains unencrypted. Arbitrary custom timer
+configuration is deliberately unsupported for frequency editing. Logs show only
+known sanitized summaries and are not a complete diagnostic journal.
+
+## Current validation
+
+`python3 -B tools/check.py` passed **436 tests in 161.268 seconds**, including
+56 Admin tests across both phases. Python, embedded JavaScript, shell syntax,
+systemd templates, safe configuration examples and recovery CLI bootstrap passed.
+`git diff --check` passed. The final targeted run passed all 26 advanced Admin
+tests and the three actual HTTP-to-broker link-state fixture tests. The allowlist
+contains 88 unique existing regular files. No tests were skipped in the full run.
+
+These are offline/modelled results, including isolated HTTP/Apache fixtures.
+They do not establish the Phase 2 installed sandbox, real systemd timer behavior,
+ARM64 acceptance or physical RF behavior. See the spare-Pi checklist in the guide.
+
+## Files changed in this increment
+
+- `README.md`
+- `activity_history.py`
+- `admin_advanced.py`
+- `admin_service.py`
+- `admin_settings.py`
+- `admin_ui.py`
+- `broker.py`
+- `config/config.example.toml`
+- `dashboard.py`
+- `docs/admin-advanced.md`
+- `docs/api.md`
+- `docs/configuration.md`
+- `docs/installation.md`
+- `docs/license-and-attribution.md`
+- `docs/public-release-review.md`
+- `docs/security.md`
+- `monitor.py`
+- `packaging/public-files.txt`
+- `packaging/release.json`
+- `packaging/systemd/kc1ray-hub-scanner-admin.service.in`
+- `scanner.py`
+- `tests/fixtures/radio-policy-protected.json`
+- `tests/test_admin.py`
+- `tests/test_admin_advanced.py`
+- `tests/test_control_security.py`
+- `tests/test_link_transitions.py`
+- `tests/test_packaging.py`
+- `tools/installer.py`
+
+## Historical 0.6.0-beta review
 
 This increment implements Phase 1 Admin only. The public allowlist now contains
 85 files, adding three runtime modules, the restricted Admin unit and its tests.
@@ -19,7 +86,7 @@ still transmits credentials/cookies without encryption. Saving Admin settings
 preserves unedited values but normalizes TOML formatting/comments. Existing
 provenance and upstream/hardware compatibility limitations remain in force.
 
-## Current validation
+## Historical 0.6.0 validation
 
 `python3 -B tools/check.py` passed **409 tests in 140.893 seconds**, including
 29 focused Admin tests. Python and embedded JavaScript syntax, example defaults,

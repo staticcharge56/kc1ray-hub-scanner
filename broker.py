@@ -70,7 +70,7 @@ class Router:
             raise Denied(400,'Invalid local request')
         op,payload=request['op'],request['payload']
         if op=='links' and payload is None:
-            return self.service.links()
+            with guard():return self.service.links()
         if op=='control':
             return self.service.control(payload)
         if op=='favorites':

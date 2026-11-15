@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import time
 import http.client
 import signal
@@ -7,11 +8,11 @@ import urllib.request
 from pathlib import Path
 
 from activity_history import (HistoryWriter, WriteThrottle, activity, atomic_json,
-                              fresh, load_history)
+                              fresh, load_history, restoration_node)
 from stats_api import (description_from_payload, InvalidStatistics, StaleStatistics, RetryPolicy,
                        fetch_statistics, parse_statistics, provider_wide_limit)
 
-from configuration import CONFIG, require_node
+from configuration import CONFIG, require_node, DEFAULT_PATH
 import favorites_store
 
 CACHE = Path(CONFIG['paths']['cache_dir']) / 'activity.json'
@@ -181,7 +182,7 @@ def main():
     require_node()
     favorites = get_favorites()
     restored, saved_retry = load_history(
-        HISTORY, LOCAL_NODE, CONFIG['monitor']['stats_url_template'], favorites,
+        HISTORY, restoration_node(HISTORY,os.environ.get('KC1RAY_CONFIG',DEFAULT_PATH),LOCAL_NODE,CONFIG['monitor']['stats_url_template']), CONFIG['monitor']['stats_url_template'], favorites,
         time.time(), CONFIG['monitor']['history_retention_seconds'])
     records.clear()
     records.update(restored)

@@ -1,4 +1,4 @@
-# KC1RAY Hub Scanner — 0.6.0-beta
+# KC1RAY Hub Scanner — 0.7.0-beta
 
 An activity dashboard and favorites scanner for personal AllStarLink nodes on
 ASL3 / Debian 12. Includes live favorites, activity history, scheduled nets and
@@ -9,7 +9,10 @@ running ASL3 Asterisk 22.10.1. Later beta increments require installed-hardware
 acceptance; other ASL3 versions and 32-bit hardware remain unverified.
 See the [release review](docs/public-release-review.md).
 
-Version **0.6.0-beta** adds an administrator-only **Admin** tab for dashboard
+Version **0.7.0-beta** extends the administrator-only **Admin** tab with local
+node selection, cooldown, backend monitoring settings, schedule frequency and
+sanitized diagnostics. See [Advanced administration](docs/admin-advanced.md).
+It retains Phase 1 dashboard
 refresh, control availability, anonymous viewing, schedule-source timers,
 password changes and read-only service status. It retains Apache `/hubscanner/`,
 standalone LAN access, restricted firewalld management and node descriptions.

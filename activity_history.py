@@ -1,4 +1,6 @@
 """Validated restart history and throttled, atomic JSON checkpoints."""
+import hashlib
+import stat
 import json
 import math
 import os
@@ -66,6 +68,32 @@ def clean_record(record, now, retention):
     if timestamp(attempted) and record['checked'] <= attempted <= now:
         clean['attempted'] = attempted
     return clean
+
+
+def restoration_node(history, config_path, current, source, *, owner=0):
+    """Accept a previous local identity only after a root-authorized node switch.
+
+    Remote favorite statistics are independent of the local radio node. All
+    existing source, retention, counter and freshness validation still applies.
+    """
+    try:
+        path=Path(config_path).parent/'node-handoff.json'
+        parent=path.parent.stat()
+        if parent.st_uid!=owner or parent.st_mode & 0o022:return current
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+        with os.fdopen(fd,'rb') as stream:
+            info=os.fstat(stream.fileno());raw=stream.read(4097)
+        if info.st_uid!=owner or info.st_mode & 0o022 or not stat.S_ISREG(info.st_mode) or len(raw)>4096:return current
+        handoff=json.loads(raw)
+        predecessors=handoff.get('predecessors',[handoff.get('previous')])
+        if (handoff.get('current')!=current or not isinstance(predecessors,list) or len(predecessors)>256 or any(not isinstance(node,str) or not re.fullmatch(r'[0-9]{3,7}',node) for node in predecessors)
+                or handoff.get('source_sha256')!=hashlib.sha256(source.encode()).hexdigest()):return current
+        with Path(history).open('rb') as stream:raw=stream.read(MAX_HISTORY_BYTES+1)
+        if len(raw)<=MAX_HISTORY_BYTES:
+            previous=json.loads(raw).get('local_node')
+            if previous in predecessors:return previous
+    except (OSError,ValueError,TypeError,AttributeError):pass
+    return current
 
 
 def load_history(path, local_node, source, favorites, now, retention):

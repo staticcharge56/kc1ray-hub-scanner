@@ -252,7 +252,8 @@ class BrokerBoundaryTests(OfflineCase):
             request.close.assert_called_once()
 
     def test_phase_3_preserves_monitor_favorites_scanner_and_schedule_code(self):
-        description=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())['description_runtime_sha256']
+        review=json.loads((ROOT/'tests/fixtures/radio-policy-protected.json').read_text())
+        description=review['description_runtime_sha256']|review['advanced_runtime_sha256']
         for filename,digest in json.loads((ROOT/'tests/fixtures/phase-3-protected.json').read_text()).items():
             digest=description.get(filename,digest) # Earlier node-description increment, not Admin changes.
             if filename in ('monitor.py','scanner.py'):
